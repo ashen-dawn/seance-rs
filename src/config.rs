@@ -90,6 +90,6 @@ impl Config {
             }
         });
 
-        config
+        return config
     }
 }

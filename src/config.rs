@@ -10,7 +10,7 @@ pub enum AutoProxyScope {
     Channel
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum PresenceMode {
     Online,
     Busy,
@@ -18,7 +18,7 @@ pub enum PresenceMode {
     Invisible,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum AutoproxyConfig {
     Member(String),
     Latch {
@@ -28,20 +28,20 @@ pub enum AutoproxyConfig {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum AutoproxyLatchScope {
     Global,
     Server
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct PluralkitConfig {
     #[serde(with = "serde_regex")]
     pub message_pattern: Regex,
     pub api_token: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct System {
     pub reference_user_id: String,
     pub members: Vec<Member>,
@@ -55,7 +55,7 @@ fn default_forward_pings() -> bool {
     false
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Member {
     pub name: String,
     #[serde(with = "serde_regex")]

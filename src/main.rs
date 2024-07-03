@@ -1,44 +1,28 @@
 mod config;
-use config::Config;
-use twilight_gateway::{Intents, Shard, ShardId};
+mod system;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    println!("Hello, world!");
+use std::thread::{self, JoinHandle};
+use tokio::runtime;
 
+use system::System;
+
+fn main() {
     let config_str = include_str!("../config.toml");
-    let config = Config::load(config_str.to_string());
+    let config = config::Config::load(config_str.to_string());
 
-    let token = config.systems.get("ashe-test").unwrap().members
-        .iter().find(|member| member.name == "test").unwrap()
-        .discord_token.clone();
+    let handles : Vec<_> = config.systems.into_iter().map(|(system_name, system_config)| -> JoinHandle<()>  {
+        println!("Starting thread for system {}", system_name);
+        thread::spawn(move || {
+            let runtime = runtime::Builder::new_current_thread().enable_all().build().expect("Could not construct Tokio runtime");
+            runtime.block_on(async {
+                let mut system = System::new(system_config);
+                system.start_clients().await;
+            })
+        })
+    }).collect();
 
-    println!("Token: {}", token);
-
-    let intents = Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
-
-    let mut shard = Shard::new(ShardId::ONE, token, intents);
-
-    loop {
-        let event = match shard.next_event().await {
-            Ok(event) => event,
-            Err(source) => {
-                println!("error receiving event");
-
-                if source.is_fatal() {
-                    break;
-                }
-
-                continue;
-            }
-        };
-
-        match event {
-            twilight_gateway::Event::MessageCreate(message) => println!("Message: {:?}", message),
-            twilight_gateway::Event::MessageUpdate(_) => println!("Message updated"),
-            twilight_gateway::Event::Ready(_) => println!("Bot ready!"),
-            _ => (),
-        }
+    for thread_handle in handles.into_iter() {
+        thread_handle.join().expect("Child thread has panicked");
     }
 }
 

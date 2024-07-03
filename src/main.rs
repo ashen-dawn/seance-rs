@@ -1,6 +1,6 @@
 mod config;
 use config::Config;
-use serenity::{all::{GatewayIntents, Message}, client::{Context, EventHandler}, Client};
+use twilight_gateway::{Intents, Shard, ShardId};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -15,28 +15,31 @@ async fn main() {
 
     println!("Token: {}", token);
 
-    let mut client = Client::builder(token, GatewayIntents::all())
-        .event_handler(MessageHandler).await.unwrap();
-        
-    client.start().await.unwrap()
-}
+    let intents = Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
 
+    let mut shard = Shard::new(ShardId::ONE, token, intents);
 
-struct MessageHandler;
+    loop {
+        let event = match shard.next_event().await {
+            Ok(event) => event,
+            Err(source) => {
+                println!("error receiving event");
 
-#[serenity::async_trait]
-impl EventHandler for MessageHandler {
-    async fn message(&self, context: Context, msg: Message) {
-        if msg.member.unwrap().user.unwrap().bot { // TODO crashes
-            return
-        }
-        
-        println!("Got message");
-        println!("{}", msg.content);
-        if let Ok(_test) = msg.channel_id.say(&context, "message acknowledged").await {
-            println!("Reply sent")
-        } else {
-            println!("Error encountered")
+                if source.is_fatal() {
+                    break;
+                }
+
+                continue;
+            }
+        };
+
+        match event {
+            twilight_gateway::Event::MessageCreate(message) => println!("Message: {:?}", message),
+            twilight_gateway::Event::MessageUpdate(_) => println!("Message updated"),
+            twilight_gateway::Event::Ready(_) => println!("Bot ready!"),
+            _ => (),
         }
     }
 }
+
+

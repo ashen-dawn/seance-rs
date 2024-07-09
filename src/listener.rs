@@ -1,5 +1,6 @@
 use tokio::sync::mpsc::Sender;
-use twilight_model::{channel::ChannelMention, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}, user::User};
+use twilight_http::Client;
+use twilight_model::{channel::Message, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}, user::User};
 use twilight_gateway::{error::ReceiveMessageError, Intents, Shard, ShardId};
 use twilight_model::util::Timestamp;
 
@@ -20,6 +21,7 @@ impl Listener {
         let intents = Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
 
         let mut shard = Shard::new(ShardId::ONE, self.config.discord_token.clone(), intents);
+        let mut client = Client::new(self.config.discord_token.clone());
         
         loop {
             match shard.next_event().await {
@@ -29,40 +31,44 @@ impl Listener {
                             println!("Bot started for {}#{}", client.user.name, client.user.discriminator);
                         },
 
-                        twilight_gateway::Event::MessageCreate(message) => {
+                        twilight_gateway::Event::MessageCreate(message_create) => {
+                            let message = message_create.0;
+
                             if message.author.id != self.reference_user_id {
                                 continue
                             }
 
                             if let Err(_) = channel.send(ClientEvent::Message {
                                 event_time: message.timestamp,
-                                message_id: message.id,
-                                channel_id: message.channel_id,
-                                author: message.author.clone(),
-                                content: message.content.clone()
+                                message
                             }).await {
                                 println!("Client listener error: System context has already closed");
                                 return
                             }
                         },
 
-                        twilight_gateway::Event::MessageUpdate(message) => {
-                            if message.author.is_none() || message.author.as_ref().unwrap().id != self.reference_user_id {
+                        twilight_gateway::Event::MessageUpdate(message_update) => {
+                            if message_update.author.is_none() || message_update.author.as_ref().unwrap().id != self.reference_user_id {
                                 continue
                             }
 
-                            if message.edited_timestamp.is_none() {
+                            if message_update.edited_timestamp.is_none() {
                                 println!("Message update but no edit timestamp");
                                 continue;
                             }
 
+                            if message_update.content.is_none() {
+                                println!("Message update but no content");
+                                continue;
+                            }
+
+                            let message = client.message(message_update.channel_id, message_update.id)
+                                .await.expect("Could not load message")
+                                .model().await.expect("Could not deserialize message");
 
                             if let Err(_) = channel.send(ClientEvent::Message {
-                                event_time: message.edited_timestamp.unwrap(),
-                                message_id: message.id,
-                                channel_id: message.channel_id,
-                                author: message.author.unwrap(),
-                                content: message.content.unwrap()
+                                event_time: message_update.edited_timestamp.unwrap(),
+                                message,
                             }).await {
                                 println!("Client listener error: System context has already closed");
                                 return
@@ -91,10 +97,7 @@ impl Listener {
 pub enum ClientEvent {
     Message {
         event_time: Timestamp,
-        message_id: Id<MessageMarker>,
-        channel_id: Id<ChannelMarker>,
-        author: User,
-        content: String,
+        message: Message,
     },
     Error(ReceiveMessageError)
 }

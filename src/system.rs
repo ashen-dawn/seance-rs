@@ -2,7 +2,7 @@ use std::{collections::HashMap, num::NonZeroUsize, str::FromStr};
 
 use tokio::sync::mpsc::channel;
 use twilight_http::Client;
-use twilight_model::id::{Id, marker::{MessageMarker, UserMarker}};
+use twilight_model::id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}};
 use twilight_model::util::Timestamp;
 
 use crate::listener::{Listener, ClientEvent};
@@ -47,11 +47,11 @@ impl System {
         loop {
             match rx.recv().await {
                 Some(event) => match event {
-                    ClientEvent::Message { event_time, message_id, content, author: _ } => {
+                    ClientEvent::Message { event_time, message_id, channel_id, content, author: _ } => {
                         if self.is_new_message(message_id, event_time) {
-                            self.handle_message(content).await;
+                            self.handle_message(message_id, channel_id, content).await;
                         }
-                    }
+                    },
                     ClientEvent::Error(_err) => {
                         println!("Client ran into an error for system {}", self.name);
                         return
@@ -76,7 +76,20 @@ impl System {
         }
     }
 
-    async fn handle_message(&mut self, content: String) {
-        println!("Message: {}", content);
+    async fn handle_message(&mut self, message_id: Id<MessageMarker>, channel_id: Id<ChannelMarker>, content: String) {
+        // Check for command
+        
+        // Check for prefix
+        for member in self.config.members.iter() {
+            if let Some(captures) = member.message_pattern.captures(content.as_str()) {
+                let client = self.clients.get(&member.name).expect("No client for member");
+                let content = captures.name("content").expect("No capture group").as_str();
+
+                if let Ok(_) = client.create_message(channel_id)
+                    .content(content).expect("Cannot set content").await {
+                        client.delete_message(channel_id, message_id).await.expect("Could not delete message");
+                    }
+            }
+        }
     }
 }

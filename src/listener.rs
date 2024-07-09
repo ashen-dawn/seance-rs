@@ -1,5 +1,5 @@
 use tokio::sync::mpsc::Sender;
-use twilight_model::{id::{Id, marker::{MessageMarker, UserMarker}}, user::User};
+use twilight_model::{channel::ChannelMention, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}, user::User};
 use twilight_gateway::{error::ReceiveMessageError, Intents, Shard, ShardId};
 use twilight_model::util::Timestamp;
 
@@ -17,8 +17,6 @@ impl Listener {
     }
 
     pub async fn start_listening(&mut self, channel : Sender<ClientEvent>) {
-        println!("Starting client with token: {}", self.config.discord_token);
-
         let intents = Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
 
         let mut shard = Shard::new(ShardId::ONE, self.config.discord_token.clone(), intents);
@@ -39,6 +37,7 @@ impl Listener {
                             if let Err(_) = channel.send(ClientEvent::Message {
                                 event_time: message.timestamp,
                                 message_id: message.id,
+                                channel_id: message.channel_id,
                                 author: message.author.clone(),
                                 content: message.content.clone()
                             }).await {
@@ -61,6 +60,7 @@ impl Listener {
                             if let Err(_) = channel.send(ClientEvent::Message {
                                 event_time: message.edited_timestamp.unwrap(),
                                 message_id: message.id,
+                                channel_id: message.channel_id,
                                 author: message.author.unwrap(),
                                 content: message.content.unwrap()
                             }).await {
@@ -92,6 +92,7 @@ pub enum ClientEvent {
     Message {
         event_time: Timestamp,
         message_id: Id<MessageMarker>,
+        channel_id: Id<ChannelMarker>,
         author: User,
         content: String,
     },

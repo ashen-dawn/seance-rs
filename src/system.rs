@@ -5,13 +5,14 @@ use twilight_http::Client;
 use twilight_model::id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}};
 use twilight_model::util::Timestamp;
 
-use crate::listener::{Listener, ClientEvent};
+use crate::{config::{AutoproxyConfig, Member, MemberName}, listener::{Listener, ClientEvent}};
 
 pub struct System {
     pub name: String,
     pub config: crate::config::System,
     pub message_dedup_cache: lru::LruCache<Id<MessageMarker>, Timestamp>,
-    pub clients: HashMap<String, Client>,
+    pub clients: HashMap<MemberName, Client>,
+    pub latch_state: Option<(Member, Timestamp)>,
 }
 
 impl System {
@@ -21,6 +22,7 @@ impl System {
             config: system_config,
             message_dedup_cache: lru::LruCache::new(NonZeroUsize::new(100).unwrap()),
             clients: HashMap::new(),
+            latch_state: None,
         }
     }
 
@@ -49,7 +51,7 @@ impl System {
                 Some(event) => match event {
                     ClientEvent::Message { event_time, message_id, channel_id, content, author: _ } => {
                         if self.is_new_message(message_id, event_time) {
-                            self.handle_message(message_id, channel_id, content).await;
+                            self.handle_message(message_id, channel_id, content, event_time).await;
                         }
                     },
                     ClientEvent::Error(_err) => {
@@ -76,19 +78,81 @@ impl System {
         }
     }
 
-    async fn handle_message(&mut self, message_id: Id<MessageMarker>, channel_id: Id<ChannelMarker>, content: String) {
+    async fn handle_message(&mut self, message_id: Id<MessageMarker>, channel_id: Id<ChannelMarker>, content: String, timestamp: Timestamp) {
         // Check for command
+        // TODO: Commands
+        // TODO: Escaping
+
+        // TODO: Non-latching prefixes maybe?
         
         // Check for prefix
-        for member in self.config.members.iter() {
-            if let Some(captures) = member.message_pattern.captures(content.as_str()) {
-                let client = self.clients.get(&member.name).expect("No client for member");
-                let content = captures.name("content").expect("No capture group").as_str();
+        let match_prefix = self.config.members.iter().find_map(|member| Some((member, member.matches_proxy_prefix(&content)?)));
+        if let Some((member, matched_content)) = match_prefix {
+            self.proxy_message(message_id, channel_id, member, matched_content).await;
+            self.update_autoproxy_state_after_message(member.clone(), timestamp);
+            return
+        }
 
-                if let Ok(_) = client.create_message(channel_id)
-                    .content(content).expect("Cannot set content").await {
-                        client.delete_message(channel_id, message_id).await.expect("Could not delete message");
+
+        // Check for autoproxy
+        if let Some(autoproxy_config) = &self.config.autoproxy {
+            match autoproxy_config {
+                AutoproxyConfig::Member {name} => {
+                    let member = self.config.members.iter().find(|member| member.name == *name).expect("Invalid autoproxy member name");
+                    self.proxy_message(message_id, channel_id, member, content.as_str()).await;
+                },
+                // TODO: Do something with the latch scope
+                // TODO: Do something with presence setting
+                AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator } => {
+                    if let Some((member, last_timestamp)) = &self.latch_state {
+                        let time_since_last = timestamp.as_secs() - last_timestamp.as_secs();
+                        if time_since_last <= (*timeout_seconds).into() {
+                            self.proxy_message(message_id, channel_id, &member, content.as_str()).await;
+                            self.latch_state = Some((member.clone(), timestamp));
+                        }
                     }
+                },
+            }
+        }
+    }
+
+    async fn proxy_message(&self, message_id: Id<MessageMarker>, channel_id: Id<ChannelMarker>, member: &Member, content: &str) {
+        let client = self.clients.get(&member.name).expect("No client for member");
+
+        if let Ok(_) = client.create_message(channel_id)
+            .content(content).expect("Cannot set content").await {
+                client.delete_message(channel_id, message_id).await.expect("Could not delete message");
+            }
+    }
+
+    fn update_autoproxy_state_after_message(&mut self, member: Member, timestamp: Timestamp) {
+        match &self.config.autoproxy {
+            None => (),
+            Some(AutoproxyConfig::Member { name }) => (),
+            Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => {
+                self.latch_state = Some((member.clone(), timestamp));
+            }
+        }
+    }
+}
+
+
+
+impl crate::config::Member {
+    pub fn matches_proxy_prefix<'a>(&self, content: &'a String) -> Option<&'a str> {
+        match self.message_pattern.captures(content.as_str()) {
+            None => None,
+            Some(captures) => {
+                let full_match = captures.get(0).unwrap();
+
+                if full_match.len() != content.len() {
+                    return None
+                }
+
+                match captures.name("content") {
+                    None => None,
+                    Some(matched_content) => Some(matched_content.as_str()),
+                }
             }
         }
     }

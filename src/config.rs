@@ -19,8 +19,11 @@ pub enum PresenceMode {
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(tag = "mode", rename_all = "lowercase")]
 pub enum AutoproxyConfig {
-    Member(String),
+    Member {
+        name: MemberName
+    },
     Latch {
         scope: AutoproxyLatchScope,
         timeout_seconds: u32,
@@ -29,6 +32,7 @@ pub enum AutoproxyConfig {
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
 pub enum AutoproxyLatchScope {
     Global,
     Server
@@ -55,9 +59,11 @@ fn default_forward_pings() -> bool {
     false
 }
 
+pub type MemberName = String;
+
 #[derive(Deserialize, Clone)]
 pub struct Member {
-    pub name: String,
+    pub name: MemberName,
     #[serde(with = "serde_regex")]
     pub message_pattern: Regex,
     pub discord_token: String,
@@ -78,13 +84,13 @@ impl Config {
         config.systems.iter().for_each(|config_system| {
             let (system_name, system) = config_system;
             if let Some(autoproxy) = &system.autoproxy {
-                if let AutoproxyConfig::Member(autoproxy_member) = autoproxy {
+                if let AutoproxyConfig::Member { name } = autoproxy {
                     let member_matches = system.members.iter().all(|member| {
-                        member.name == *autoproxy_member 
+                        member.name == *name
                     });
 
                     if !member_matches {
-                        panic!("System {} autoproxy member {} does not match a known member name", system_name, autoproxy_member);
+                        panic!("System {} autoproxy member {} does not match a known member name", system_name, name);
                     }
                 }
             }

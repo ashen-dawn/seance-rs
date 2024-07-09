@@ -1,5 +1,6 @@
 mod config;
 mod system;
+mod listener;
 
 use std::thread::{self, JoinHandle};
 use tokio::runtime;
@@ -11,11 +12,10 @@ fn main() {
     let config = config::Config::load(config_str.to_string());
 
     let handles : Vec<_> = config.systems.into_iter().map(|(system_name, system_config)| -> JoinHandle<()>  {
-        println!("Starting thread for system {}", system_name);
         thread::spawn(move || {
             let runtime = runtime::Builder::new_current_thread().enable_all().build().expect("Could not construct Tokio runtime");
             runtime.block_on(async {
-                let mut system = System::new(system_config);
+                let mut system = System::new(system_name, system_config);
                 system.start_clients().await;
             })
         })

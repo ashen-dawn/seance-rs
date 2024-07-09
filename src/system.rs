@@ -6,11 +6,12 @@ use tokio::sync::Mutex;
 use twilight_http::Client;
 use twilight_model::id::{Id, marker::{MessageMarker, UserMarker}};
 use twilight_gateway::{Intents, Shard, ShardId};
+use twilight_model::util::Timestamp;
 
 #[derive(Clone)]
 pub struct System {
     pub config: crate::config::System,
-    pub message_dedup_cache: Arc<Mutex<lru::LruCache<Id<MessageMarker>, ()>>>,
+    pub message_dedup_cache: Arc<Mutex<lru::LruCache<Id<MessageMarker>, Timestamp>>>,
 }
 
 impl System {
@@ -64,7 +65,7 @@ impl System {
                                 continue
                             }
 
-                            if self_clone.is_new_message(message.id).await {
+                            if self_clone.is_new_message(message.id, message.timestamp).await {
                                 self_clone.handle_message_create(message, &mut client).await;
                             }
                         },
@@ -74,7 +75,7 @@ impl System {
                                 continue
                             }
 
-                            if self_clone.is_new_message(message.id).await {
+                            if self_clone.is_new_message(message.id, message.edited_timestamp.unwrap_or(message.timestamp.expect("No message creation timestamp"))).await {
                                 self_clone.handle_message_update(message, &mut client).await;
                             }
                         },
@@ -94,10 +95,14 @@ impl System {
         }
     }
 
-    async fn is_new_message(&self, message_id: Id<MessageMarker>) -> bool {
+    async fn is_new_message(&self, message_id: Id<MessageMarker>, timestamp: Timestamp) -> bool {
         let mut message_cache = self.message_dedup_cache.lock().await;
-        if let None = message_cache.get(&message_id) {
-            message_cache.put(message_id, ());
+
+        let last_seen_timestamp = message_cache.get(&message_id);
+        let current_timestamp = timestamp;
+
+        if last_seen_timestamp.is_none() || last_seen_timestamp.unwrap().as_micros() < current_timestamp.as_micros() {
+            message_cache.put(message_id, timestamp);
             true
         } else {
             false
@@ -115,7 +120,7 @@ impl System {
         }
     }
 
-    async fn handle_message_update(&self, _message: Box<twilight_model::gateway::payload::incoming::MessageUpdate>, _client: &mut Client) {
-        // TODO: handle message edits and stuff
+    async fn handle_message_update(&self, message: Box<twilight_model::gateway::payload::incoming::MessageUpdate>, _client: &mut Client) {
+        println!("Message updated: {}", message.content.unwrap_or("".to_string()))
     }
 }

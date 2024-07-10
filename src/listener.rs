@@ -80,6 +80,7 @@ impl Listener {
                 },
                 Err(source) => {
                     if !source.is_fatal() {
+                        println!("Warn: Client encountered an error: {}", source.to_string());
                         continue;
                     }
 

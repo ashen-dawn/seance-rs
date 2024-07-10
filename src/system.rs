@@ -81,9 +81,25 @@ impl System {
     }
 
     async fn handle_message(&mut self, message: Message, timestamp: Timestamp) {
-        // Check for command
         // TODO: Commands
-        // TODO: Escaping
+
+        // Escape sequence
+        if message.content.starts_with(r"\") {
+            if message.content == r"\\" {
+                let client = if let Some((current_member, _)) = self.latch_state.clone() {
+                    self.clients.get(&current_member.name).expect(format!("No client for member {}", current_member.name).as_str())
+                } else {
+                    self.clients.iter().next().expect("No clients!").1
+                };
+
+                client.delete_message(message.channel_id, message.id).await.expect("Could not delete message");
+                self.latch_state = None
+            } else if message.content.starts_with(r"\\") {
+                self.latch_state = None;
+            }
+
+            return
+        }
 
         // TODO: Non-latching prefixes maybe?
         
@@ -94,7 +110,6 @@ impl System {
             self.update_autoproxy_state_after_message(member.clone(), timestamp);
             return
         }
-
 
         // Check for autoproxy
         if let Some(autoproxy_config) = &self.config.autoproxy {

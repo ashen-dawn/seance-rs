@@ -19,6 +19,7 @@ pub struct System {
     pub channel: (Sender<ClientEvent>, Receiver<ClientEvent>),
     pub autoproxy_timeout: Option<Timestamp>,
     pub gateway_channels: HashMap<MemberName, MessageSender>,
+    pub last_presence: HashMap<MemberName, Status>,
 }
 
 impl System {
@@ -32,6 +33,7 @@ impl System {
             autoproxy_timeout: None,
             channel: channel::<ClientEvent>(100),
             gateway_channels: HashMap::new(),
+            last_presence: HashMap::new(),
         }
     }
 
@@ -72,7 +74,7 @@ impl System {
                         if let Some(current_last_message) = self.autoproxy_timeout {
                             if current_last_message == last_message {
                                 self.latch_state = None;
-                                self.update_presence().await;
+                                self.update_status_of_system();
                             }
                         }
                     },
@@ -124,7 +126,7 @@ impl System {
         if let Some((member, matched_content)) = match_prefix {
             self.proxy_message(&message, member, matched_content).await;
             self.update_autoproxy_state_after_message(member.clone(), timestamp);
-            self.update_presence().await;
+            self.update_status_of_system();
             return
         }
 
@@ -143,7 +145,7 @@ impl System {
                         if time_since_last <= (*timeout_seconds).into() {
                             self.proxy_message(&message, &member, message.content.as_str()).await;
                             self.latch_state = Some((member.clone(), timestamp));
-                            self.update_presence().await;
+                            self.update_status_of_system();
                         }
                     }
                 },
@@ -154,7 +156,16 @@ impl System {
     async fn proxy_message(&self, message: &Message, member: &Member, content: &str) {
         let client = self.clients.get(&member.name).expect("No client for member");
 
-        if let Ok(_) = self.duplicate_message(message, client, content).await {
+        if let Err(err) = self.duplicate_message(message, client, content).await {
+            match err {
+                MessageDuplicateError::MessageCreate(err) => {
+                    if err.to_string().contains("Cannot send an empty message") {
+                        client.delete_message(message.channel_id, message.id).await.expect("Could not delete message");
+                    }
+                },
+                _ => println!("Error: {:?}", err),
+            }
+        } else {
             client.delete_message(message.channel_id, message.id).await.expect("Could not delete message");
         }
     }
@@ -211,71 +222,51 @@ impl System {
         }
     }
 
-    async fn update_presence(&mut self) {
-        match &self.config.autoproxy {
-            None => (),
-            Some(AutoproxyConfig::Member { name }) => {
-                for member in &self.config.members {
-                    let gateway_channel = self.gateway_channels.get(&member.name).expect("No gateway shard for member");
-
-                    println!("Updating {} to {}", member.name, if member.name == *name { "online" } else { "offline" });
-
-                    gateway_channel.command(&UpdatePresence {
-                        d: UpdatePresencePayload {
-                            activities: Vec::new(),
-                            afk: false,
-                            since: None,
-                            status: if member.name == *name {
-                                Status::Online
-                            } else {
-                                Status::Invisible
-                            },
-                        },
-                        op: OpCode::PresenceUpdate,
-                    }).expect("Could not send command to gateway");
-                }
-            },
-            Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => {
-                if let Some((member, last_timestamp)) = &self.latch_state {
-                    let name = &member.name;
-                    for member in &self.config.members {
-                        let gateway_channel = self.gateway_channels.get(&member.name).expect("No gateway shard for member");
-
-                        println!("Updating {} to {}", member.name, if member.name == *name { "online" } else { "offline" });
-
-                        gateway_channel.command(&UpdatePresence {
-                            d: UpdatePresencePayload {
-                                activities: Vec::new(),
-                                afk: false,
-                                since: None,
-                                status: if member.name == *name {
-                                    Status::Online
-                                } else {
-                                    Status::Invisible
-                                },
-                            },
-                            op: OpCode::PresenceUpdate,
-                        }).expect("Could not send command to gateway");
-                    }
+    fn update_status_of_system(&mut self) {
+        let member_states : Vec<(Member, Status)> = self.config.members.iter().map(|member| {
+            match &self.config.autoproxy {
+                None => (member.clone(), Status::Invisible),
+                Some(AutoproxyConfig::Member { name }) => (member.clone(), if member.name == *name {
+                    Status::Online
                 } else {
-                    for member in &self.config.members {
-                        let gateway_channel = self.gateway_channels.get(&member.name).expect("No gateway shard for member");
-
-                        println!("Updating {} to offline", member.name);
-
-                        gateway_channel.command(&UpdatePresence {
-                            d: UpdatePresencePayload {
-                                activities: Vec::new(),
-                                afk: false,
-                                since: None,
-                                status: Status::Invisible,
-                            },
-                            op: OpCode::PresenceUpdate,
-                        }).expect("Could not send command to gateway");
+                    Status::Invisible
+                }),
+                Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => 
+                    match &self.latch_state {
+                        Some((latch_member, _last_timestamp)) => (member.clone(), if member.name == latch_member.name {
+                            Status::Online
+                        } else {
+                            Status::Invisible
+                        }),
+                        None => (member.clone(), Status::Invisible),
                     }
-                }
             }
+        }).collect();
+
+        for (member, status) in member_states {
+            self.update_status_of_member(&member, status);
         }
+    }
+
+    fn update_status_of_member(&mut self, member: &Member, status: Status) {
+        let last_status = *self.last_presence.get(&member.name).unwrap_or(&Status::Offline);
+
+        if status == last_status {
+            return
+        }
+
+        let gateway_channel = self.gateway_channels.get(&member.name).expect("No gateway shard for member");
+        gateway_channel.command(&UpdatePresence {
+            d: UpdatePresencePayload {
+                activities: Vec::new(),
+                afk: false,
+                since: None,
+                status,
+            },
+            op: OpCode::PresenceUpdate,
+        }).expect("Could not send command to gateway");
+
+        self.last_presence.insert(member.name.clone(), status);
     }
 }
 
@@ -301,6 +292,7 @@ impl crate::config::Member {
     }
 }
 
+#[derive(Debug)]
 enum MessageDuplicateError {
     MessageValidation(twilight_validate::message::MessageValidationError),
     AttachmentRequest(reqwest::Error),

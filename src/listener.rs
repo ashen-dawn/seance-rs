@@ -1,7 +1,7 @@
 use tokio::sync::mpsc::Sender;
 use twilight_http::Client;
 use twilight_model::{channel::Message, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}, user::User};
-use twilight_gateway::{error::ReceiveMessageError, Intents, Shard, ShardId};
+use twilight_gateway::{error::ReceiveMessageError, Intents, MessageSender, Shard, ShardId};
 use twilight_model::util::Timestamp;
 
 pub struct Listener {
@@ -21,14 +21,18 @@ impl Listener {
         let intents = Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
 
         let mut shard = Shard::new(ShardId::ONE, self.config.discord_token.clone(), intents);
-        let mut client = Client::new(self.config.discord_token.clone());
-        
+        let client = Client::new(self.config.discord_token.clone());
+
         loop {
             match shard.next_event().await {
                 Ok(event) => {
                     match event {
                         twilight_gateway::Event::Ready(client) => {
                             println!("Bot started for {}#{}", client.user.name, client.user.discriminator);
+                            channel.send(ClientEvent::Ready {
+                                client_name: self.config.name.clone(),
+                                send_channel: shard.sender(),
+                            }).await;
                         },
 
                         twilight_gateway::Event::MessageCreate(message_create) => {
@@ -96,6 +100,13 @@ impl Listener {
 }
 
 pub enum ClientEvent {
+    Ready {
+        client_name: String,
+        send_channel: MessageSender,
+    },
+    AutoproxyTimeout {
+        last_message: Timestamp,
+    },
     Message {
         event_time: Timestamp,
         message: Message,

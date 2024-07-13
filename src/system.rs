@@ -17,7 +17,6 @@ pub struct System {
     pub clients: HashMap<MemberName, Client>,
     pub latch_state: Option<(Member, Timestamp)>,
     pub channel: (Sender<ClientEvent>, Receiver<ClientEvent>),
-    pub autoproxy_timeout: Option<Timestamp>,
     pub gateway_channels: HashMap<MemberName, MessageSender>,
     pub last_presence: HashMap<MemberName, Status>,
 }
@@ -30,7 +29,6 @@ impl System {
             message_dedup_cache: lru::LruCache::new(NonZeroUsize::new(100).unwrap()),
             clients: HashMap::new(),
             latch_state: None,
-            autoproxy_timeout: None,
             channel: channel::<ClientEvent>(100),
             gateway_channels: HashMap::new(),
             last_presence: HashMap::new(),
@@ -71,10 +69,13 @@ impl System {
                         return
                     },
                     ClientEvent::AutoproxyTimeout { last_message } => {
-                        if let Some(current_last_message) = self.autoproxy_timeout {
+                        if let Some((_member, current_last_message)) = self.latch_state.clone() {
                             if current_last_message == last_message {
+                                println!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), last_message.as_secs());
                                 self.latch_state = None;
                                 self.update_status_of_system();
+                            } else {
+                                println!("Autoproxy timeout called but not expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), last_message.as_secs());
                             }
                         }
                     },
@@ -140,11 +141,12 @@ impl System {
                 // TODO: Do something with the latch scope
                 // TODO: Do something with presence setting
                 AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator } => {
-                    if let Some((member, last_timestamp)) = &self.latch_state {
+                    if let Some((member, last_timestamp)) = self.latch_state.clone() {
                         let time_since_last = timestamp.as_secs() - last_timestamp.as_secs();
                         if time_since_last <= (*timeout_seconds).into() {
                             self.proxy_message(&message, &member, message.content.as_str()).await;
                             self.latch_state = Some((member.clone(), timestamp));
+                            self.update_autoproxy_state_after_message(member.clone(), timestamp);
                             self.update_status_of_system();
                         }
                     }
@@ -207,7 +209,6 @@ impl System {
             Some(AutoproxyConfig::Member { name }) => (),
             Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => {
                 self.latch_state = Some((member.clone(), timestamp));
-                self.autoproxy_timeout = Some(timestamp);
 
                 let tx = self.channel.0.clone();
                 let last_message = timestamp.clone();

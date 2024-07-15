@@ -74,8 +74,6 @@ impl System {
                                 println!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), last_message.as_secs());
                                 self.latch_state = None;
                                 self.update_status_of_system();
-                            } else {
-                                println!("Autoproxy timeout called but not expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), last_message.as_secs());
                             }
                         }
                     },
@@ -278,12 +276,6 @@ impl crate::config::Member {
         match self.message_pattern.captures(message.content.as_str()) {
             None => None,
             Some(captures) => {
-                let full_match = captures.get(0).unwrap();
-
-                if full_match.len() != message.content.len() {
-                    return None
-                }
-
                 match captures.name("content") {
                     None => None,
                     Some(matched_content) => Some(matched_content.as_str()),

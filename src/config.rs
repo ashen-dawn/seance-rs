@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use regex::Regex;
-use serde::Deserialize;
+use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Deserializer, de::Error};
 
 #[derive(Deserialize)]
 pub enum AutoProxyScope {
@@ -40,7 +40,7 @@ pub enum AutoproxyLatchScope {
 
 #[derive(Deserialize, Clone)]
 pub struct PluralkitConfig {
-    #[serde(with = "serde_regex")]
+    #[serde(deserialize_with = "parse_regex")]
     pub message_pattern: Regex,
     pub api_token: String,
 }
@@ -64,7 +64,7 @@ pub type MemberName = String;
 #[derive(Deserialize, Clone)]
 pub struct Member {
     pub name: MemberName,
-    #[serde(with = "serde_regex")]
+    #[serde(deserialize_with = "parse_regex")]
     pub message_pattern: Regex,
     pub discord_token: String,
     pub presence: Option<PresenceMode>,
@@ -98,4 +98,22 @@ impl Config {
 
         return config
     }
+}
+
+fn parse_regex<'de, D: Deserializer<'de>> (deserializer: D) -> Result<Regex, D::Error> {
+    let mut pattern = String::deserialize(deserializer)?;
+
+    if !pattern.starts_with("^") {
+        pattern.insert(0, '^');
+    }
+
+    if !pattern.ends_with("$") {
+        pattern.push('$');
+    }
+
+    RegexBuilder::new(&pattern)
+        .multi_line(true)
+        .case_insensitive(true)
+        .build()
+        .map_err(|e| D::Error::custom(e))
 }

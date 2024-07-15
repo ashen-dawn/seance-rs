@@ -1190,7 +1190,6 @@ dependencies = [
  "regex",
  "reqwest",
  "serde",
- "serde_regex",
  "tokio",
  "toml",
  "twilight-gateway",
@@ -1260,16 +1259,6 @@ checksum = "176e46fa42316f18edd598015a5166857fc835ec732f5215eac6b7bdbf0a84f4"
 dependencies = [
  "itoa",
  "ryu",
- "serde",
-]
-
-[[package]]
-name = "serde_regex"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
-dependencies = [
- "regex",
  "serde",
 ]
 

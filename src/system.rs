@@ -8,7 +8,7 @@ use twilight_model::{channel::{message::MessageType, Message}, gateway::{payload
 use twilight_model::util::Timestamp;
 use twilight_model::http::attachment::Attachment;
 
-use crate::{config::{AutoproxyConfig, Member, MemberName}, listener::{Listener, ClientEvent}};
+use crate::{config::{AutoproxyConfig, AutoproxyLatchScope, Member, MemberName}, listener::{Listener, ClientEvent}};
 
 pub struct System {
     pub name: String,
@@ -204,8 +204,8 @@ impl System {
     fn update_autoproxy_state_after_message(&mut self, member: Member, timestamp: Timestamp) {
         match &self.config.autoproxy {
             None => (),
-            Some(AutoproxyConfig::Member { name }) => (),
-            Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => {
+            Some(AutoproxyConfig::Member { name: _ }) => (),
+            Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator: _ }) => {
                 self.latch_state = Some((member.clone(), timestamp));
 
                 let tx = self.channel.0.clone();
@@ -230,15 +230,23 @@ impl System {
                 } else {
                     Status::Invisible
                 }),
-                Some(AutoproxyConfig::Latch { scope, timeout_seconds, presence_indicator }) => 
-                    match &self.latch_state {
-                        Some((latch_member, _last_timestamp)) => (member.clone(), if member.name == latch_member.name {
-                            Status::Online
-                        } else {
-                            Status::Invisible
-                        }),
-                        None => (member.clone(), Status::Invisible),
+                Some(AutoproxyConfig::Latch { scope, timeout_seconds: _, presence_indicator }) => {
+                    if let AutoproxyLatchScope::Server = scope {
+                        (member.clone(), Status::Invisible)
                     }
+                    else if !presence_indicator {
+                        (member.clone(), Status::Invisible)
+                    } else {
+                        match &self.latch_state {
+                            Some((latch_member, _last_timestamp)) => (member.clone(), if member.name == latch_member.name {
+                                Status::Online
+                            } else {
+                                Status::Invisible
+                            }),
+                            None => (member.clone(), Status::Invisible),
+                        }
+                    }
+                }
             }
         }).collect();
 

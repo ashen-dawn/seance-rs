@@ -182,11 +182,15 @@ impl System {
 
         let attachments = join_all(message.attachments.iter().map(|attachment| async {
             let filename = attachment.filename.clone();
-            let description = attachment.description.clone();
+            let description_opt = attachment.description.clone();
             let bytes = reqwest::get(attachment.proxy_url.clone()).await?.bytes().await?;
+            let mut new_attachment = Attachment::from_bytes(filename, bytes.try_into().unwrap(), attachment.id.into());
 
-            // TODO: keep description
-            Ok(Attachment::from_bytes(filename, bytes.try_into().unwrap(), attachment.id.into()))
+            if let Some(description) = description_opt {
+                new_attachment.description(description);
+            }
+
+            Ok(new_attachment)
         })).await.iter().filter_map(|result: &Result<Attachment, MessageDuplicateError>| match result {
             Ok(attachment) => Some(attachment.clone()),
             Err(_) => None,

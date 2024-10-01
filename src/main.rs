@@ -2,7 +2,7 @@ mod config;
 mod system;
 mod listener;
 
-use std::{fs, thread};
+use std::{fs, panic};
 use tokio::{runtime, task::JoinSet};
 
 fn main() {
@@ -14,12 +14,7 @@ fn main() {
     let mut waiters = JoinSet::new();
 
     for (system_name, system_config) in config.systems.into_iter() {
-        let system_handle = spawn_system(&system_name, system_config);
-
-        waiters.spawn_blocking_on(move || -> String {
-            system_handle.join();
-            system_name
-        }, waiter_pool.handle());
+        spawn_system(&mut waiters, &waiter_pool, &system_name, system_config);
     }
 
     runtime::Builder::new_current_thread().build().unwrap().block_on(async {
@@ -37,30 +32,32 @@ fn main() {
                 let updated_config = config::Config::load(config_file);
 
                 if let Some((_, system_config)) = updated_config.systems.into_iter().find(|(name, _)| name.eq(&system_name)) {
-                    let system_handle = spawn_system(&system_name, system_config.clone());
-                    
-                    waiters.spawn_blocking_on(move || -> String {
-                        system_handle.join();
-                        system_name
-                    }, waiter_pool.handle());
+                    spawn_system(&mut waiters, &waiter_pool, &system_name, system_config.clone());
                 } else {
                     println!("New config file but this system no longer exists, exiting.");
                 }
+            } else {
+                println!("Thread panicked");
             }
         }
     })
 }
 
-fn spawn_system(system_name : &String, system_config: config::System) -> thread::JoinHandle<()> {
+fn spawn_system(joinset: &mut JoinSet<String>, pool: &tokio::runtime::Runtime, system_name : &String, system_config: config::System) {
     let name = system_name.clone();
-    thread::spawn(move || {
+    let config = system_config.clone();
+    joinset.spawn_blocking_on(move || -> String {
         let thread_local_runtime = runtime::Builder::new_current_thread().enable_all().build().unwrap();
 
-        thread_local_runtime.block_on(async {
-            let mut system = system::System::new(name, system_config);
-            system.start_clients().await;
+        let _ = panic::catch_unwind(|| {
+            thread_local_runtime.block_on(async {
+                let mut system = system::System::new(name.clone(), config);
+                system.start_clients().await;
+            });
         });
-    })
+
+        name
+    }, pool.handle());
 }
 
 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize, str::FromStr, time::Duration};
+use std::{collections::HashMap, convert::Infallible, num::NonZeroUsize, str::FromStr, time::Duration};
 
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::{Sleep,sleep}};
 use futures::future::join_all;
@@ -47,6 +47,8 @@ impl System {
 
             let tx = self.channel.0.clone();
             let member = member.clone();
+
+            // Start gateway listener
             tokio::spawn(async move {
                 let mut listener = Listener::new(member, reference_user_id);
                 listener.start_listening(tx).await;
@@ -58,6 +60,14 @@ impl System {
                 Some(event) => match event {
                     ClientEvent::Ready { client_name, send_channel } => {
                         self.gateway_channels.insert(client_name, send_channel);
+
+                        if self.gateway_channels.len() == self.clients.len() {
+                            let tx = self.channel.0.clone();
+                            tokio::spawn(async move {
+                                sleep(Duration::from_secs(10)).await;
+                                let _ = tx.send(ClientEvent::Startup).await;
+                            });
+                        }
                     },
                     ClientEvent::Message { event_time, message } => {
                         if self.is_new_message(message.id, event_time) {
@@ -76,6 +86,10 @@ impl System {
                                 self.update_status_of_system();
                             }
                         }
+                    },
+                    ClientEvent::Startup => {
+                        println!("Attempting to set startup status for system {}", self.name.clone());
+                        self.update_status_of_system();
                     },
                 },
                 None => {
@@ -99,6 +113,9 @@ impl System {
 
     async fn handle_message(&mut self, message: Message, timestamp: Timestamp) {
         // TODO: Commands
+        if message.content.eq("!panic") {
+            panic!("Exiting due to user command");
+        }
 
         // Escape sequence
         if message.content.starts_with(r"\") {

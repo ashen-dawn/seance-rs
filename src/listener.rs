@@ -100,6 +100,7 @@ impl Listener {
 }
 
 pub enum ClientEvent {
+    Startup,
     Ready {
         client_name: String,
         send_channel: MessageSender,

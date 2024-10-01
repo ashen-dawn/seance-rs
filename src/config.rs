@@ -112,7 +112,7 @@ fn parse_regex<'de, D: Deserializer<'de>> (deserializer: D) -> Result<Regex, D::
     }
 
     RegexBuilder::new(&pattern)
-        .multi_line(true)
+        .dot_matches_new_line(true)
         .case_insensitive(true)
         .build()
         .map_err(|e| D::Error::custom(e))

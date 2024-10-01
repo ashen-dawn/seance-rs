@@ -4,7 +4,7 @@ use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::{Sleep,sleep}};
 use futures::future::join_all;
 use twilight_gateway::MessageSender;
 use twilight_http::Client;
-use twilight_model::{channel::{message::MessageType, Message}, gateway::{payload::outgoing::{update_presence::UpdatePresencePayload, UpdatePresence}, presence::Status, OpCode}, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}};
+use twilight_model::{channel::{message::{AllowedMentions, MentionType, MessageType}, Message}, gateway::{payload::outgoing::{update_presence::UpdatePresencePayload, UpdatePresence}, presence::Status, OpCode}, id::{Id, marker::{ChannelMarker, MessageMarker, UserMarker}}};
 use twilight_model::util::Timestamp;
 use twilight_model::http::attachment::Attachment;
 
@@ -174,10 +174,32 @@ impl System {
         let mut create_message = client.create_message(message.channel_id)
             .content(content)?;
 
+        let mut allowed_mentions = AllowedMentions {
+            parse: Vec::new(),
+            replied_user: false,
+            roles: message.mention_roles.clone(),
+            users: message.mentions.iter().map(|user| user.id).collect(),
+        };
+
+        if message.mention_everyone {
+            allowed_mentions.parse.push(MentionType::Everyone);
+        }
+
         if message.kind == MessageType::Reply {
-            create_message = create_message.reply(
-                message.referenced_message.as_ref().expect("Message was reply but no referenced message").id
-            );
+            if let Some(ref_message) = message.referenced_message.as_ref() {
+                create_message = create_message.reply(ref_message.id);
+
+                let pings_referenced_author = message.mentions.iter().any(|user| user.id == ref_message.author.id);
+
+                if pings_referenced_author {
+                    allowed_mentions.replied_user = true;
+                } else {
+                    allowed_mentions.replied_user = false;
+                }
+
+            } else {
+                panic!("Cannot proxy message: Was reply but no referenced message");
+            }
         }
 
         let attachments = join_all(message.attachments.iter().map(|attachment| async {
@@ -200,6 +222,11 @@ impl System {
             create_message = create_message.attachments(attachments.as_slice())?;
         }
 
+        if let Some(flags) = message.flags {
+            create_message = create_message.flags(flags);
+        }
+
+        create_message = create_message.allowed_mentions(Some(&allowed_mentions));
         let new_message = create_message.await?.model().await?;
 
         Ok(new_message)

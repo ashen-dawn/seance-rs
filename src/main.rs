@@ -1,5 +1,6 @@
 mod config;
 mod system;
+use system::Manager;
 
 use std::{fs, panic};
 use tokio::{runtime, task::JoinSet};
@@ -50,7 +51,7 @@ fn spawn_system(joinset: &mut JoinSet<String>, pool: &tokio::runtime::Runtime, s
 
         let _ = panic::catch_unwind(|| {
             thread_local_runtime.block_on(async {
-                let mut system = system::Manager::new(name.clone(), config);
+                let mut system = Manager::new(name.clone(), config);
                 system.start_clients().await;
             });
         });

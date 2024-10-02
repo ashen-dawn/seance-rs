@@ -1,37 +1,33 @@
 use std::{collections::HashMap, str::FromStr, time::Duration};
 
-use futures::future::join_all;
 use tokio::{
     sync::mpsc::{channel, Sender},
     time::sleep,
 };
-use twilight_http::Client;
-use twilight_model::http::attachment::Attachment;
-use twilight_model::util::Timestamp;
 use twilight_model::{
     channel::{
-        message::{AllowedMentions, MentionType, MessageType},
         Message,
     },
     id::{marker::UserMarker, Id},
 };
+use twilight_model::util::Timestamp;
 
 use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
 
 mod aggregator;
-mod gateway;
+mod bot;
 mod types;
 use aggregator::MessageAggregator;
-use gateway::Gateway;
+use bot::Bot;
 pub use types::*;
+
+use self::bot::MessageDuplicateError;
 
 pub struct Manager {
     pub name: String,
     pub config: crate::config::System,
-    pub clients: HashMap<MemberId, Client>,
-    pub gateways: HashMap<MemberId, Gateway>,
+    pub bots: HashMap<MemberId, Bot>,
     pub latch_state: Option<(MemberId, Timestamp)>,
-    pub last_presence: HashMap<MemberId, Status>,
     pub system_sender: Option<Sender<SystemEvent>>,
 }
 
@@ -40,10 +36,8 @@ impl Manager {
         Self {
             name: system_name,
             config: system_config,
-            clients: HashMap::new(),
-            gateways: HashMap::new(),
+            bots: HashMap::new(),
             latch_state: None,
-            last_presence: HashMap::new(),
             system_sender: None,
         }
     }
@@ -81,19 +75,15 @@ impl Manager {
         aggregator.set_handler(system_sender.clone());
 
         for (member_id, member) in self.config.members.iter().enumerate() {
-            // Create outgoing client
-            let client = twilight_http::Client::new(member.discord_token.clone());
-            self.clients.insert(member_id, client);
-
             // Create gateway listener
-            let mut listener = Gateway::new(member_id, &member, reference_user_id);
+            let mut bot = Bot::new(member_id, &member, reference_user_id);
 
-            listener.set_message_handler(aggregator.get_sender());
-            listener.set_system_handler(system_sender.clone());
+            bot.set_message_handler(aggregator.get_sender());
+            bot.set_system_handler(system_sender.clone());
 
             // Start gateway listener
-            listener.start_listening();
-            self.gateways.insert(member_id, listener);
+            bot.start_listening();
+            self.bots.insert(member_id, bot);
         }
 
         aggregator.start();
@@ -174,18 +164,16 @@ impl Manager {
         // Escape sequence
         if message.content.starts_with(r"\") {
             if message.content == r"\\" {
-                let client = if let Some((current_member, _)) = self.latch_state.clone() {
-                    self.clients
+                let bot = if let Some((current_member, _)) = self.latch_state.clone() {
+                    self.bots
                         .get(&current_member)
                         .expect(format!("No client for member {}", current_member).as_str())
                 } else {
-                    self.clients.iter().next().expect("No clients!").1
+                    self.bots.iter().next().expect("No clients!").1
                 };
 
-                client
-                    .delete_message(message.channel_id, message.id)
-                    .await
-                    .expect("Could not delete message");
+                // We don't really care about the outcome here, we don't proxy afterwards
+                let _ = bot.delete_message(message.channel_id, message.id).await;
                 self.latch_state = None
             } else if message.content.starts_with(r"\\") {
                 self.latch_state = None;
@@ -197,7 +185,6 @@ impl Manager {
         // TODO: Non-latching prefixes maybe?
 
         // Check for prefix
-        println!("Checking prefix");
         let match_prefix =
             self.config
                 .members
@@ -207,16 +194,15 @@ impl Manager {
                     Some((member_id, member.matches_proxy_prefix(&message)?))
                 });
         if let Some((member_id, matched_content)) = match_prefix {
-            self.proxy_message(&message, member_id, matched_content)
-                .await;
-            println!("Updating proxy state to member id {}", member_id);
-            self.update_autoproxy_state_after_message(member_id, timestamp);
-            self.update_status_of_system().await;
-            return;
+            if let Ok(_) = self.proxy_message(&message, member_id, matched_content).await {
+                self.latch_state = Some((member_id, timestamp));
+                self.update_autoproxy_state_after_message(member_id, timestamp);
+                self.update_status_of_system().await;
+            }
+            return
         }
 
         // Check for autoproxy
-        println!("Checking autoproxy");
         if let Some(autoproxy_config) = &self.config.autoproxy {
             match autoproxy_config {
                 AutoproxyConfig::Member { name } => {
@@ -233,126 +219,40 @@ impl Manager {
                     timeout_seconds,
                     presence_indicator,
                 } => {
-                    println!("Currently in latch mode");
                     if let Some((member, last_timestamp)) = self.latch_state.clone() {
-                        println!("We have a latch state");
                         let time_since_last = timestamp.as_secs() - last_timestamp.as_secs();
-                        println!("Time since last (seconds) {}", time_since_last);
                         if time_since_last <= (*timeout_seconds).into() {
-                            println!("Proxying");
-                            self.proxy_message(&message, member, message.content.as_str())
-                                .await;
-                            self.latch_state = Some((member, timestamp));
-                            self.update_autoproxy_state_after_message(member, timestamp);
-                            self.update_status_of_system().await;
+                            if let Ok(_) = self.proxy_message(&message, member, message.content.as_str()).await {
+                                self.latch_state = Some((member, timestamp));
+                                self.update_autoproxy_state_after_message(member, timestamp);
+                                self.update_status_of_system().await;
+                            }
                         }
                     }
                 }
             }
-        } else {
-            println!("No autoproxy config?");
         }
     }
 
-    async fn proxy_message(&self, message: &Message, member: MemberId, content: &str) {
-        let client = self.clients.get(&member).expect("No client for member");
+    async fn proxy_message(&self, message: &Message, member: MemberId, content: &str) -> Result<(), ()> {
+        let bot = self.bots.get(&member).expect("No client for member");
 
-        if let Err(err) = self.duplicate_message(message, client, content).await {
-            match err {
-                MessageDuplicateError::MessageCreate(err) => {
-                    if err.to_string().contains("Cannot send an empty message") {
-                        client
-                            .delete_message(message.channel_id, message.id)
-                            .await
-                            .expect("Could not delete message");
-                    }
-                }
-                _ => println!("Error: {:?}", err),
-            }
-        } else {
-            client
-                .delete_message(message.channel_id, message.id)
-                .await
-                .expect("Could not delete message");
-        }
-    }
+        let duplicate_result = bot.duplicate_message(message, content).await;
 
-    async fn duplicate_message(
-        &self,
-        message: &Message,
-        client: &Client,
-        content: &str,
-    ) -> Result<Message, MessageDuplicateError> {
-        let mut create_message = client.create_message(message.channel_id).content(content)?;
-
-        let mut allowed_mentions = AllowedMentions {
-            parse: Vec::new(),
-            replied_user: false,
-            roles: message.mention_roles.clone(),
-            users: message.mentions.iter().map(|user| user.id).collect(),
-        };
-
-        if message.mention_everyone {
-            allowed_mentions.parse.push(MentionType::Everyone);
+        if duplicate_result.is_err() {
+            return Err(())
         }
 
-        if message.kind == MessageType::Reply {
-            if let Some(ref_message) = message.referenced_message.as_ref() {
-                create_message = create_message.reply(ref_message.id);
+        // Try to delete message first as that fails more often
+        let delete_result = bot.delete_message(message.channel_id, message.id).await;
 
-                let pings_referenced_author = message
-                    .mentions
-                    .iter()
-                    .any(|user| user.id == ref_message.author.id);
-
-                if pings_referenced_author {
-                    allowed_mentions.replied_user = true;
-                } else {
-                    allowed_mentions.replied_user = false;
-                }
-            } else {
-                panic!("Cannot proxy message: Was reply but no referenced message");
-            }
+        if delete_result.is_err() {
+            // Delete the duplicated message if that failed
+            let _ = bot.delete_message(message.channel_id, duplicate_result.unwrap().id).await;
+            return Err(())
         }
 
-        let attachments = join_all(message.attachments.iter().map(|attachment| async {
-            let filename = attachment.filename.clone();
-            let description_opt = attachment.description.clone();
-            let bytes = reqwest::get(attachment.proxy_url.clone())
-                .await?
-                .bytes()
-                .await?;
-            let mut new_attachment =
-                Attachment::from_bytes(filename, bytes.try_into().unwrap(), attachment.id.into());
-
-            if let Some(description) = description_opt {
-                new_attachment.description(description);
-            }
-
-            Ok(new_attachment)
-        }))
-        .await
-        .iter()
-        .filter_map(
-            |result: &Result<Attachment, MessageDuplicateError>| match result {
-                Ok(attachment) => Some(attachment.clone()),
-                Err(_) => None,
-            },
-        )
-        .collect::<Vec<_>>();
-
-        if attachments.len() > 0 {
-            create_message = create_message.attachments(attachments.as_slice())?;
-        }
-
-        if let Some(flags) = message.flags {
-            create_message = create_message.flags(flags);
-        }
-
-        create_message = create_message.allowed_mentions(Some(&allowed_mentions));
-        let new_message = create_message.await?.model().await?;
-
-        Ok(new_message)
+        Ok(())
     }
 
     fn update_autoproxy_state_after_message(&mut self, member: MemberId, timestamp: Timestamp) {
@@ -433,25 +333,8 @@ impl Manager {
     }
 
     async fn update_status_of_member(&mut self, member: MemberId, status: Status) {
-        let last_status = *self.last_presence.get(&member).unwrap_or(&Status::Offline);
-
-        if status == last_status {
-            return;
-        }
-
-        if let Some(gateway) = self.gateways.get(&member) {
-            gateway.set_status(status).await;
-
-            self.last_presence.insert(member, status);
-        } else {
-            let full_member = self
-                .find_member_by_id(member)
-                .expect("Cannot look up member");
-            println!(
-                "Could not look up gateway for member ID {} ({})",
-                member, full_member.name
-            );
-        }
+        let bot = self.bots.get(&member).expect("No client for member");
+        bot.set_status(status).await;
     }
 }
 
@@ -467,34 +350,3 @@ impl crate::config::Member {
     }
 }
 
-#[derive(Debug)]
-enum MessageDuplicateError {
-    MessageValidation(twilight_validate::message::MessageValidationError),
-    AttachmentRequest(reqwest::Error),
-    MessageCreate(twilight_http::error::Error),
-    ResponseDeserialization(twilight_http::response::DeserializeBodyError),
-}
-
-impl From<twilight_validate::message::MessageValidationError> for MessageDuplicateError {
-    fn from(value: twilight_validate::message::MessageValidationError) -> Self {
-        MessageDuplicateError::MessageValidation(value)
-    }
-}
-
-impl From<reqwest::Error> for MessageDuplicateError {
-    fn from(value: reqwest::Error) -> Self {
-        MessageDuplicateError::AttachmentRequest(value)
-    }
-}
-
-impl From<twilight_http::error::Error> for MessageDuplicateError {
-    fn from(value: twilight_http::error::Error) -> Self {
-        MessageDuplicateError::MessageCreate(value)
-    }
-}
-
-impl From<twilight_http::response::DeserializeBodyError> for MessageDuplicateError {
-    fn from(value: twilight_http::response::DeserializeBodyError) -> Self {
-        MessageDuplicateError::ResponseDeserialization(value)
-    }
-}

@@ -1,10 +1,11 @@
 use twilight_model::channel::Message;
-use twilight_model::id::marker::{MessageMarker, UserMarker};
+use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
 use twilight_model::id::Id;
 use twilight_model::util::Timestamp;
 
 pub type MemberId = usize;
 pub type MessageId = Id<MessageMarker>;
+pub type ChannelId = Id<ChannelMarker>;
 pub type UserId = Id<UserMarker>;
 
 pub type Status = twilight_model::gateway::presence::Status;

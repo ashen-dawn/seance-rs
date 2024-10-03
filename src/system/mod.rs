@@ -4,12 +4,7 @@ use tokio::{
     sync::mpsc::{channel, Sender},
     time::sleep,
 };
-use twilight_model::{
-    channel::{
-        Message,
-    },
-    id::{marker::UserMarker, Id},
-};
+use twilight_model::id::{marker::UserMarker, Id};
 use twilight_model::util::Timestamp;
 
 use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
@@ -21,7 +16,6 @@ use aggregator::MessageAggregator;
 use bot::Bot;
 pub use types::*;
 
-use self::bot::MessageDuplicateError;
 
 pub struct Manager {
     pub name: String,
@@ -72,17 +66,17 @@ impl Manager {
         let (system_sender, mut system_receiver) = channel::<SystemEvent>(100);
         self.system_sender = Some(system_sender.clone());
         let mut aggregator = MessageAggregator::new();
-        aggregator.set_handler(system_sender.clone());
+        aggregator.set_system_handler(system_sender.clone());
 
         for (member_id, member) in self.config.members.iter().enumerate() {
             // Create gateway listener
             let mut bot = Bot::new(member_id, &member, reference_user_id);
 
-            bot.set_message_handler(aggregator.get_sender());
-            bot.set_system_handler(system_sender.clone());
+            bot.set_message_handler(aggregator.get_sender()).await;
+            bot.set_system_handler(system_sender.clone()).await;
 
             // Start gateway listener
-            bot.start_listening();
+            bot.start();
             self.bots.insert(member_id, bot);
         }
 
@@ -122,8 +116,12 @@ impl Manager {
 
                         num_connected -= 1;
                     }
-                    SystemEvent::NewMessage((event_time, message)) => {
+                    SystemEvent::NewMessage(event_time, message) => {
                         self.handle_message(message, event_time).await;
+                    }
+                    SystemEvent::RefetchMessage(member_id, message_id, channel_id) => {
+                        let bot = self.bots.get(&member_id).expect("No bot");
+                        bot.refetch_message(message_id, channel_id).await;
                     }
                     SystemEvent::GatewayError(member_id, message) => {
                         let member = self
@@ -155,7 +153,7 @@ impl Manager {
         }
     }
 
-    async fn handle_message(&mut self, message: Message, timestamp: Timestamp) {
+    async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp) {
         // TODO: Commands
         if message.content.eq("!panic") {
             panic!("Exiting due to user command");
@@ -234,12 +232,13 @@ impl Manager {
         }
     }
 
-    async fn proxy_message(&self, message: &Message, member: MemberId, content: &str) -> Result<(), ()> {
+    async fn proxy_message(&self, message: &TwiMessage, member: MemberId, content: &str) -> Result<(), ()> {
         let bot = self.bots.get(&member).expect("No client for member");
 
         let duplicate_result = bot.duplicate_message(message, content).await;
 
         if duplicate_result.is_err() {
+            println!("Could not copy message: {:?}", duplicate_result);
             return Err(())
         }
 
@@ -247,6 +246,8 @@ impl Manager {
         let delete_result = bot.delete_message(message.channel_id, message.id).await;
 
         if delete_result.is_err() {
+            println!("Could not delete message: {:?}", delete_result);
+
             // Delete the duplicated message if that failed
             let _ = bot.delete_message(message.channel_id, duplicate_result.unwrap().id).await;
             return Err(())
@@ -339,7 +340,7 @@ impl Manager {
 }
 
 impl crate::config::Member {
-    pub fn matches_proxy_prefix<'a>(&self, message: &'a Message) -> Option<&'a str> {
+    pub fn matches_proxy_prefix<'a>(&self, message: &'a TwiMessage) -> Option<&'a str> {
         match self.message_pattern.captures(message.content.as_str()) {
             None => None,
             Some(captures) => match captures.name("content") {

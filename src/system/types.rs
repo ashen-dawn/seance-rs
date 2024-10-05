@@ -27,8 +27,8 @@ pub enum SystemEvent {
     GatewayConnected(MemberId),
     GatewayError(MemberId, String),
     GatewayClosed(MemberId),
-    AllGatewaysConnected,
     RefetchMessage(MemberId, MessageId, ChannelId),
+    UpdateClientStatus(MemberId),
 
     // User event handling
     NewMessage(Timestamp, FullMessage),

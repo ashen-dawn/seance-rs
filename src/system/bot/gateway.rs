@@ -76,7 +76,7 @@ impl Gateway {
 
                         if source.is_fatal() {
                             system_channel.send(SystemEvent::GatewayClosed(bot_conf.member_id)).await;
-                            break;
+                            return;
                         }
                     }
                     Ok(event) => match event {

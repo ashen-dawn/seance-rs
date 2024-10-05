@@ -1,7 +1,7 @@
-use std::{collections::HashMap, str::FromStr, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use tokio::{
-    sync::mpsc::{channel, Sender},
+    sync::{mpsc::{channel, Sender}, RwLock},
     time::sleep,
 };
 use twilight_model::id::{marker::UserMarker, Id};
@@ -23,16 +23,21 @@ pub struct Manager {
     pub bots: HashMap<MemberId, Bot>,
     pub latch_state: Option<(MemberId, Timestamp)>,
     pub system_sender: Option<Sender<SystemEvent>>,
+    pub aggregator: MessageAggregator,
+    pub reference_user_id: UserId,
 }
 
 impl Manager {
     pub fn new(system_name: String, system_config: crate::config::System) -> Self {
         Self {
+            reference_user_id: Id::from_str(&system_config.reference_user_id.as_str())
+                .expect(format!("Invalid user id for system {}", &system_name).as_str()),
             name: system_name,
             config: system_config,
             bots: HashMap::new(),
             latch_state: None,
             system_sender: None,
+            aggregator: MessageAggregator::new(),
         }
     }
 
@@ -59,104 +64,100 @@ impl Manager {
     pub async fn start_clients(&mut self) {
         println!("Starting clients for system {}", self.name);
 
-        let reference_user_id: Id<UserMarker> =
-            Id::from_str(self.config.reference_user_id.as_str())
-                .expect(format!("Invalid user ID: {}", self.config.reference_user_id).as_str());
-
         let (system_sender, mut system_receiver) = channel::<SystemEvent>(100);
         self.system_sender = Some(system_sender.clone());
-        let mut aggregator = MessageAggregator::new();
-        aggregator.set_system_handler(system_sender.clone());
+        self.aggregator.set_system_handler(system_sender.clone()).await;
+        self.aggregator.start();
 
-        for (member_id, member) in self.config.members.iter().enumerate() {
-            // Create gateway listener
-            let mut bot = Bot::new(member_id, &member, reference_user_id);
-
-            bot.set_message_handler(aggregator.get_sender()).await;
-            bot.set_system_handler(system_sender.clone()).await;
-
-            // Start gateway listener
-            bot.start();
-            self.bots.insert(member_id, bot);
+        for member_id in 0..self.config.members.len() {
+            self.start_bot(member_id).await;
         }
-
-        aggregator.start();
-
-        let mut num_connected = 0;
 
         loop {
             match system_receiver.recv().await {
-                Some(event) => match event {
-                    SystemEvent::GatewayConnected(member_id) => {
-                        let member = self
-                            .find_member_by_id(member_id)
-                            .expect("Could not find member");
+                Some(SystemEvent::GatewayConnected(member_id)) => {
+                    let member = self.find_member_by_id(member_id).unwrap();
 
-                        num_connected += 1;
-                        println!(
-                            "Gateway client {} ({}) connected",
-                            num_connected, member.name
-                        );
+                    println!("Gateway client {} ({}) connected", member.name, member_id);
+                }
 
-                        if num_connected == self.config.members.len() {
-                            let system_sender = system_sender.clone();
-                            tokio::spawn(async move {
-                                println!("All gateways connected");
-                                sleep(Duration::from_secs(5)).await;
-                                let _ = system_sender.send(SystemEvent::AllGatewaysConnected).await;
-                            });
+                Some(SystemEvent::GatewayError(member_id, message)) => {
+                    let member = self.find_member_by_id(member_id).unwrap();
+
+                    println!("Gateway client {} ran into error {}", member.name, message);
+                }
+
+                Some(SystemEvent::GatewayClosed(member_id)) => {
+                    let member = self.find_member_by_id(member_id).unwrap();
+
+                    println!("Gateway client {} closed", member.name);
+
+                    self.start_bot(member_id).await;
+                }
+
+                Some(SystemEvent::NewMessage(event_time, message)) => {
+                    self.handle_message(message, event_time).await;
+                }
+
+                Some(SystemEvent::RefetchMessage(member_id, message_id, channel_id)) => {
+                    let bot = self.bots.get(&member_id).unwrap();
+                    bot.refetch_message(message_id, channel_id).await;
+                }
+
+                Some(SystemEvent::AutoproxyTimeout(time_scheduled)) => {
+                    if let Some((_member, current_last_message)) = self.latch_state.clone() {
+                        if current_last_message == time_scheduled {
+                            println!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), time_scheduled.as_secs());
+                            self.latch_state = None;
+                            self.update_status_of_system().await;
                         }
                     }
-                    SystemEvent::GatewayClosed(member_id) => {
-                        let member = self
-                            .find_member_by_id(member_id)
-                            .expect("Could not find member");
-
-                        println!("Gateway client {} closed", member.name);
-
-                        num_connected -= 1;
-                    }
-                    SystemEvent::NewMessage(event_time, message) => {
-                        self.handle_message(message, event_time).await;
-                    }
-                    SystemEvent::RefetchMessage(member_id, message_id, channel_id) => {
-                        let bot = self.bots.get(&member_id).expect("No bot");
-                        bot.refetch_message(message_id, channel_id).await;
-                    }
-                    SystemEvent::GatewayError(member_id, message) => {
-                        let member = self
-                            .find_member_by_id(member_id)
-                            .expect("Could not find member");
-                        println!("Gateway client {} ran into error {}", member.name, message);
-                        return;
-                    }
-                    SystemEvent::AutoproxyTimeout(time_scheduled) => {
-                        if let Some((_member, current_last_message)) = self.latch_state.clone() {
-                            if current_last_message == time_scheduled {
-                                println!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), time_scheduled.as_secs());
-                                self.latch_state = None;
-                                self.update_status_of_system().await;
-                            }
-                        }
-                    }
-                    SystemEvent::AllGatewaysConnected => {
-                        println!(
-                            "Attempting to set startup status for system {}",
-                            self.name.clone()
-                        );
-                        self.update_status_of_system().await;
-                    }
-                    _ => (),
                 },
-                None => return,
+
+                Some(SystemEvent::UpdateClientStatus(member_id)) => {
+                    let bot = self.bots.get(&member_id).unwrap();
+
+                    // TODO: handle other presence modes
+                    if let Some((latched_id, _)) = self.latch_state {
+                        if latched_id == member_id {
+                            bot.set_status(Status::Online).await;
+                            continue
+                        }
+                    }
+
+                    bot.set_status(Status::Invisible).await;
+                }
+
+                _ => continue,
             }
         }
+    }
+
+    async fn start_bot(&mut self, member_id: MemberId) {
+        let member = self.find_member_by_id(member_id).unwrap();
+
+        // Create gateway listener
+        let mut bot = Bot::new(member_id, &member, self.reference_user_id);
+
+        bot.set_message_handler(self.aggregator.get_sender().await).await;
+        bot.set_system_handler(self.system_sender.as_ref().unwrap().clone()).await;
+
+        // Start gateway listener
+        bot.start();
+        self.bots.insert(member_id, bot);
+
+        // Schedule status update after a few seconds
+        let rx = self.system_sender.as_ref().unwrap().clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_secs(10)).await;
+            let _ = rx.send(SystemEvent::UpdateClientStatus(member_id)).await;
+        });
     }
 
     async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp) {
         // TODO: Commands
         if message.content.eq("!panic") {
-            panic!("Exiting due to user command");
+           self.bots.iter_mut().next().unwrap().1.shutdown().await;
         }
 
         // Escape sequence

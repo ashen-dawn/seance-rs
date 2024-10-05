@@ -4,7 +4,8 @@ use tokio::{
     sync::{mpsc::{channel, Sender}, RwLock},
     time::sleep,
 };
-use twilight_model::id::{marker::UserMarker, Id};
+use twilight_http::request::channel::reaction::RequestReactionType;
+use twilight_model::{channel::message::ReactionType, id::{marker::UserMarker, Id}};
 use twilight_model::util::Timestamp;
 
 use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
@@ -12,9 +13,14 @@ use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
 mod aggregator;
 mod bot;
 mod types;
+mod message_parser;
+
+use message_parser::MessageParser;
 use aggregator::MessageAggregator;
 use bot::Bot;
 pub use types::*;
+
+use self::message_parser::Command;
 
 
 pub struct Manager {
@@ -155,81 +161,37 @@ impl Manager {
     }
 
     async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp) {
-        // TODO: Commands
-        if message.content.eq("!panic") {
-           self.bots.iter_mut().next().unwrap().1.shutdown().await;
-        }
+        let parsed_message = MessageParser::parse(&message, None, &self.config, self.latch_state);
 
-        // Escape sequence
-        if message.content.starts_with(r"\") {
-            if message.content == r"\\" {
-                let bot = if let Some((current_member, _)) = self.latch_state.clone() {
-                    self.bots
-                        .get(&current_member)
-                        .expect(format!("No client for member {}", current_member).as_str())
-                } else {
-                    self.bots.iter().next().expect("No clients!").1
-                };
+        match parsed_message {
+            message_parser::ParsedMessage::UnproxiedMessage => (),
 
-                // We don't really care about the outcome here, we don't proxy afterwards
-                let _ = bot.delete_message(message.channel_id, message.id).await;
-                self.latch_state = None
-            } else if message.content.starts_with(r"\\") {
+            message_parser::ParsedMessage::LatchClear(member_id) => {
+                let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
                 self.latch_state = None;
-            }
+            },
 
-            return;
-        }
-
-        // TODO: Non-latching prefixes maybe?
-
-        // Check for prefix
-        let match_prefix =
-            self.config
-                .members
-                .iter()
-                .enumerate()
-                .find_map(|(member_id, member)| {
-                    Some((member_id, member.matches_proxy_prefix(&message)?))
-                });
-        if let Some((member_id, matched_content)) = match_prefix {
-            if let Ok(_) = self.proxy_message(&message, member_id, matched_content).await {
-                self.latch_state = Some((member_id, timestamp));
-                self.update_autoproxy_state_after_message(member_id, timestamp);
-                self.update_status_of_system().await;
-            }
-            return
-        }
-
-        // Check for autoproxy
-        if let Some(autoproxy_config) = &self.config.autoproxy {
-            match autoproxy_config {
-                AutoproxyConfig::Member { name } => {
-                    let (member_id, _member) = self
-                        .find_member_by_name(&name)
-                        .expect("Invalid autoproxy member name");
-                    self.proxy_message(&message, member_id, message.content.as_str())
-                        .await;
-                }
-                // TODO: Do something with the latch scope
-                // TODO: Do something with presence setting
-                AutoproxyConfig::Latch {
-                    scope,
-                    timeout_seconds,
-                    presence_indicator,
-                } => {
-                    if let Some((member, last_timestamp)) = self.latch_state.clone() {
-                        let time_since_last = timestamp.as_secs() - last_timestamp.as_secs();
-                        if time_since_last <= (*timeout_seconds).into() {
-                            if let Ok(_) = self.proxy_message(&message, member, message.content.as_str()).await {
-                                self.latch_state = Some((member, timestamp));
-                                self.update_autoproxy_state_after_message(member, timestamp);
-                                self.update_status_of_system().await;
-                            }
-                        }
+            message_parser::ParsedMessage::ProxiedMessage { member_id, message_content, latch } => {
+                if let Ok(_) = self.proxy_message(&message, member_id, message_content.as_str()).await {
+                    if latch {
+                        self.update_autoproxy_state_after_message(member_id, timestamp);
+                        self.update_status_of_system().await;
                     }
                 }
-            }
+            },
+
+            message_parser::ParsedMessage::Command(Command::UnknownCommand) => {
+                let member_id = if let Some((member_id, _)) = self.latch_state {
+                    member_id
+                } else {
+                    0
+                };
+
+                let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "⁉️" }).await;
+            },
+            message_parser::ParsedMessage::Command(_) => todo!(),
+            message_parser::ParsedMessage::EmoteAdd(_, _, _) => todo!(),
+            message_parser::ParsedMessage::EmoteRemove(_, _, _) => todo!(),
         }
     }
 
@@ -337,18 +299,6 @@ impl Manager {
     async fn update_status_of_member(&mut self, member: MemberId, status: Status) {
         let bot = self.bots.get(&member).expect("No client for member");
         bot.set_status(status).await;
-    }
-}
-
-impl crate::config::Member {
-    pub fn matches_proxy_prefix<'a>(&self, message: &'a TwiMessage) -> Option<&'a str> {
-        match self.message_pattern.captures(message.content.as_str()) {
-            None => None,
-            Some(captures) => match captures.name("content") {
-                None => None,
-                Some(matched_content) => Some(matched_content.as_str()),
-            },
-        }
     }
 }
 

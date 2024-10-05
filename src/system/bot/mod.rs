@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 use twilight_http::error::Error as TwiError;
+use twilight_http::request::channel::reaction::RequestReactionType;
 
 pub use super::types::*;
 pub use client::MessageDuplicateError;
@@ -71,6 +72,10 @@ impl Bot {
 
     pub async fn delete_message(&self, channel_id: ChannelId, message_id: MessageId) -> Result<(), TwiError> {
         self.client.delete_message(channel_id, message_id).await
+    }
+
+    pub async fn react_message(&self, channel_id: ChannelId, message_id: MessageId, react: &'_ RequestReactionType<'_>) -> Result<(), TwiError> {
+        self.client.react_message(channel_id, message_id, react).await
     }
 
     pub async fn duplicate_message(&self, message_id: &TwiMessage, content: &str) ->  Result<TwiMessage, MessageDuplicateError> {

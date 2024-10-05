@@ -52,6 +52,8 @@ impl Client {
         let delete_result = client.delete_message(channel_id, message_id).await;
         let member_id = self.bot_conf.read().await.member_id;
 
+        drop(client);
+
         match delete_result {
             Err(err) => {
                 match &err.kind() {
@@ -60,11 +62,7 @@ impl Client {
                             // Code for "Missing Permissions": https://discord.com/developers/docs/topics/opcodes-and-status-codes#json-json-error-codes
                             if err.code == 50013 {
                                 println!("ERROR: Client {} doesn't have permissions to delete message", member_id);
-                                let _ = client.create_reaction(
-                                    channel_id,
-                                    message_id,
-                                    &RequestReactionType::Unicode { name: "🔐" }
-                                ).await;
+                                let _ = self.react_message(channel_id, message_id, &RequestReactionType::Unicode { name: "🔐" }).await;
                             }
                         },
                         _ => (),
@@ -76,6 +74,16 @@ impl Client {
             },
             _ => Ok(()),
         }
+    }
+
+    pub async fn react_message(&self, channel_id: ChannelId, message_id: MessageId, react: &'_ RequestReactionType<'_>) -> Result<(), TwiError> {
+        let _ = self.client.lock().await.create_reaction(
+            channel_id,
+            message_id,
+            react
+        ).await;
+
+        return Ok(())
     }
 
     pub async fn duplicate_message(&self, message: &TwiMessage, content: &str) -> Result<TwiMessage, MessageDuplicateError> {

@@ -24,7 +24,7 @@ pub type CommandEvent = (Timestamp, ());
 
 pub enum SystemEvent {
     // Process of operation
-    GatewayConnected(MemberId),
+    GatewayConnected(MemberId, UserId),
     GatewayError(MemberId, String),
     GatewayClosed(MemberId),
     RefetchMessage(MemberId, MessageId, ChannelId),

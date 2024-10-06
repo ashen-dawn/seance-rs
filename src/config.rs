@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, de::Error};
 
+use crate::system::UserId;
+
 #[derive(Deserialize)]
 pub enum AutoProxyScope {
     Global,
@@ -67,6 +69,8 @@ pub struct Member {
     #[serde(deserialize_with = "parse_regex")]
     pub message_pattern: Regex,
     pub discord_token: String,
+    #[serde(skip)]
+    pub user_id: Option<UserId>,
     pub presence: Option<PresenceMode>,
     pub status: Option<String>,
 }

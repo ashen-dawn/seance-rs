@@ -84,7 +84,10 @@ impl Manager {
 
         loop {
             match system_receiver.recv().await {
-                Some(SystemEvent::GatewayConnected(member_id)) => {
+                Some(SystemEvent::GatewayConnected(member_id, user_id)) => {
+                    self.config.members.iter_mut().enumerate()
+                        .find(|(id, _)| *id == member_id).unwrap().1.user_id = Some(user_id);
+
                     let member = self.find_member_by_id(member_id).unwrap();
 
                     println!("Gateway client {} ({}) connected", member.name, member_id);

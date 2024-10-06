@@ -80,9 +80,9 @@ impl Gateway {
                         }
                     }
                     Ok(event) => match event {
-                        twilight_gateway::Event::Ready(_) => {
+                        twilight_gateway::Event::Ready(ready) => {
                             system_channel
-                                .send(SystemEvent::GatewayConnected(bot_conf.member_id))
+                                .send(SystemEvent::GatewayConnected(bot_conf.member_id, ready.user.id))
                                 .await;
                         }
 

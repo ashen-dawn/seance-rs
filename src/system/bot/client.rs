@@ -90,6 +90,13 @@ impl Client {
         return Ok(())
     }
 
+    pub async fn edit_message(&self, channel_id: ChannelId, message_id: MessageId, new_content: String) -> Result<FullMessage, TwiError> {
+        Ok(self.client.lock().await.update_message(channel_id, message_id)
+            .content(Some(new_content.as_str())).expect("Invalid message contents")
+            .await.expect("Could not update message")
+            .model().await.unwrap())
+    }
+
     pub async fn duplicate_message(&self, message: &TwiMessage, content: &str) -> Result<TwiMessage, MessageDuplicateError> {
         let client = self.client.lock().await;
 

@@ -206,6 +206,22 @@ impl Manager {
                 }
             },
 
+            message_parser::ParsedMessage::Command(Command::Edit(member_id, message_id, new_content)) => {
+                let bot = self.bots.get(&member_id).unwrap();
+
+                if let Ok(new_message) = bot.edit_message(message.channel_id, message_id, new_content).await {
+
+                    // If we just edited the most recently sent message in this channel, update
+                    // cache for future edit commands
+                    if self.send_cache.get(&new_message.channel_id).map_or(MessageId::new(1u64), |m| m.id) == message_id {
+                        self.send_cache.put(new_message.channel_id, new_message);
+                    }
+
+                    // Delete the command message
+                    let _ = bot.delete_message(message.channel_id, message.id).await;
+                }
+            }
+
             message_parser::ParsedMessage::Command(Command::UnknownCommand) => {
                 let member_id = if let Some((member_id, _)) = self.latch_state {
                     member_id

@@ -1,11 +1,11 @@
 use std::sync::LazyLock;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use crate::config::System;
 
 use twilight_mention::ParseMention;
 use twilight_model::id::{marker::UserMarker, Id};
-use super::{FullMessage, MemberId, MessageId, Timestamp};
+use super::{FullMessage, MemberId, MessageId, Timestamp, UserId};
 
 pub enum ParsedMessage {
     Command(Command),
@@ -23,12 +23,13 @@ pub enum ParsedMessage {
 }
 
 pub enum Command {
-    Edit(MessageId, String),
+    Edit(MemberId, MessageId, String),
     Reproxy(MemberId, MessageId),
     Nick(MemberId, String),
     ReloadSystemConfig,
     ExitSéance,
     UnknownCommand,
+    InvalidCommand
 }
 
 pub struct MessageParser {}
@@ -81,7 +82,10 @@ impl MessageParser {
 
         match first_word {
             Some(command_name) => match command_name {
-                "edit" => return Command::Edit(secondary_message.unwrap().id, words.remainder().unwrap().to_string()),
+                "edit" => {
+                    let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();
+                    return Command::Edit(editing_member, secondary_message.unwrap().id, words.remainder().unwrap().to_string())
+                },
                 "nick" => {
                     if let Some(member) = MessageParser::match_member(words.next(), system_config) {
                         return Command::Nick(member, words.remainder().unwrap().to_string());
@@ -97,24 +101,48 @@ impl MessageParser {
             None => return Command::UnknownCommand,
         }
 
-        
+        // Attempt matching !s
+        if message.content.chars().nth(1).unwrap() == 's' {
+            let separator = message.content.chars().nth(2).unwrap();
+            let parts: Vec<&str> = message.content.split(separator).collect();
+
+            if parts.len() != 3 && parts.len() != 4 {
+                return Command::InvalidCommand
+            }
+
+            let pattern = parts.get(1).unwrap();
+            let replacement = parts.get(2).unwrap();
+            let flags = parts.get(3).unwrap_or(&"");
+
+            let mut global = false;
+            let mut regex = RegexBuilder::new(pattern);
+
+            for flag in flags.chars() {match flag {
+                'i' => {regex.case_insensitive(true);},
+                'm' => {regex.multi_line(true);},
+                'g' => {global = true;},
+                'x' => {regex.ignore_whitespace(true);},
+                'R' => {regex.crlf(true);},
+                's' => {regex.dot_matches_new_line(true);},
+                'U' => {regex.swap_greed(true);},
+                _ => {return Command::InvalidCommand;},
+            }};
+
+            let regex = regex.build().unwrap();
+
+            let original_content = &secondary_message.as_ref().unwrap().content;
+            let new_content = if global {
+                regex.replace_all(original_content.as_str(), *replacement)
+            } else {
+                regex.replace(original_content.as_str(), *replacement)
+            };
+
+            let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();
+            return Command::Edit(editing_member, secondary_message.as_ref().unwrap().id, new_content.to_string());
+        }
+
         // If unable to parse
         Command::UnknownCommand
-    }
-
-    fn match_member(maybe_mention: Option<&str>, system_config: &System) -> Option<MemberId> {
-        if let Some(maybe_mention) = maybe_mention {
-            if let Ok(mention) = Id::<UserMarker>::parse(maybe_mention) {
-                system_config.members.iter().enumerate()
-                    .filter(|(_id, m)| m.user_id.is_some())
-                    .find(|(_id, m)| m.user_id.unwrap() == mention)
-                    .map(|(id, _m)| id)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     }
 
     fn check_correction(message: &FullMessage, secondary_message: Option<FullMessage>) -> Option<ParsedMessage> {
@@ -147,6 +175,23 @@ impl MessageParser {
         } else {
             None
         }
+    }
+
+    fn match_member(maybe_mention: Option<&str>, system_config: &System) -> Option<MemberId> {
+        if let Some(maybe_mention) = maybe_mention {
+            if let Ok(mention) = Id::<UserMarker>::parse(maybe_mention) {
+                return MessageParser::get_member_id_from_user_id(mention, system_config)
+            }
+        }
+
+        None
+    }
+
+    fn get_member_id_from_user_id(user_id: UserId, system_config: &System) -> Option<MemberId> {
+        system_config.members.iter().enumerate()
+            .filter(|(_id, m)| m.user_id.is_some())
+            .find(|(_id, m)| m.user_id.unwrap() == user_id)
+            .map(|(id, _m)| id)
     }
 }
 

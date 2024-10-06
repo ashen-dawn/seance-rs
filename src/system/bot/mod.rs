@@ -74,6 +74,10 @@ impl Bot {
         self.client.resend_message(message_id, channel_id).await;
     }
 
+    pub async fn edit_message(&self, channel_id: ChannelId, message_id: MessageId, new_content: String) -> Result<FullMessage, TwiError> {
+        self.client.edit_message(channel_id, message_id, new_content).await
+    }
+
     pub async fn delete_message(&self, channel_id: ChannelId, message_id: MessageId) -> Result<(), TwiError> {
         self.client.delete_message(channel_id, message_id).await
     }

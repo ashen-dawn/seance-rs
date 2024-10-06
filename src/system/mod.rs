@@ -209,6 +209,12 @@ impl Manager {
                 self.latch_state = None;
             },
 
+            message_parser::ParsedMessage::SetProxyAndDelete(member_id) => {
+                let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
+                self.update_autoproxy_state_after_message(member_id, message.timestamp);
+                self.update_status_of_system();
+            }
+
             message_parser::ParsedMessage::ProxiedMessage { member_id, message_content, latch } => {
                 if let Ok(_) = self.proxy_message(&message, member_id, message_content.as_str()).await {
                     if latch {

@@ -9,6 +9,7 @@ use super::{FullMessage, MemberId, MessageId, Timestamp, UserId};
 
 pub enum ParsedMessage {
     Command(Command),
+    SetProxyAndDelete(MemberId),
     ProxiedMessage {
         member_id: MemberId,
         message_content: String,
@@ -155,11 +156,15 @@ impl MessageParser {
         );
 
         if let Some((member_id, matched_content)) = matches_prefix {
-            Some(ParsedMessage::ProxiedMessage {
-                member_id,
-                message_content: matched_content.to_string(),
-                latch: true,
-            })
+            if matched_content.trim() != "" {
+                Some(ParsedMessage::ProxiedMessage {
+                    member_id,
+                    message_content: matched_content.to_string(),
+                    latch: true,
+                })
+            } else {
+                Some(ParsedMessage::SetProxyAndDelete(member_id))
+            }
         } else {
             None
         }

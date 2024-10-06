@@ -21,7 +21,7 @@ use aggregator::MessageAggregator;
 use bot::Bot;
 pub use types::*;
 
-use self::message_parser::Command;
+use self::message_parser::{Command, ParsedMessage};
 
 
 pub struct Manager {
@@ -207,6 +207,7 @@ impl Manager {
             message_parser::ParsedMessage::LatchClear(member_id) => {
                 let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
                 self.latch_state = None;
+                self.update_status_of_system();
             },
 
             message_parser::ParsedMessage::SetProxyAndDelete(member_id) => {
@@ -238,6 +239,29 @@ impl Manager {
                     // Delete the command message
                     let _ = bot.delete_message(message.channel_id, message.id).await;
                 }
+            }
+
+            message_parser::ParsedMessage::Command(Command::Reproxy(member_id, message_id)) => {
+                if !referenced_message.map(|message| message.id == message_id).unwrap_or(false) {
+                    println!("ERROR: Attempted reproxy on message other than referenced_message");
+                    let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "⁉️" }).await;
+                    return
+                }
+
+                let message_author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config).unwrap();
+                if message_author != member_id {
+                    // TODO: Don't allow this if other messages have been sent maybe?
+                    let orig = referenced_message.unwrap().clone();
+                    if let Ok(_) = self.proxy_message(&orig, member_id, orig.content.as_str()).await {
+                        self.update_autoproxy_state_after_message(member_id, timestamp);
+                        self.update_status_of_system().await;
+                    }
+                } else {
+                    println!("Not reproxying under same user");
+                }
+
+                let bot = self.bots.get(&member_id).unwrap();
+                let _ = bot.delete_message(message.channel_id, message.id).await;
             }
 
             message_parser::ParsedMessage::Command(Command::UnknownCommand) => {

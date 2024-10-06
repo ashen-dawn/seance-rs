@@ -65,7 +65,7 @@ impl MessageParser {
             }
         }
 
-        if let Some(parse) = MessageParser::check_member_patterns(message, system_config) {
+        if let Some(parse) = MessageParser::check_member_patterns(message, secondary_message, system_config) {
             return parse
         }
 
@@ -150,13 +150,15 @@ impl MessageParser {
         None
     }
 
-    fn check_member_patterns(message: &FullMessage, system_config: &System) -> Option<ParsedMessage> {
+    fn check_member_patterns(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System) -> Option<ParsedMessage> {
         let matches_prefix = system_config.members.iter().enumerate().find_map(|(member_id, member)|
             Some((member_id, member.matches_proxy_prefix(&message)?))
         );
 
         if let Some((member_id, matched_content)) = matches_prefix {
-            if matched_content.trim() != "" {
+            if matched_content.trim() == "*" {
+                Some(ParsedMessage::Command(Command::Reproxy(member_id, secondary_message.unwrap().id)))
+            } else if matched_content.trim() != "" {
                 Some(ParsedMessage::ProxiedMessage {
                     member_id,
                     message_content: matched_content.to_string(),
@@ -192,7 +194,7 @@ impl MessageParser {
         None
     }
 
-    fn get_member_id_from_user_id(user_id: UserId, system_config: &System) -> Option<MemberId> {
+    pub fn get_member_id_from_user_id(user_id: UserId, system_config: &System) -> Option<MemberId> {
         system_config.members.iter().enumerate()
             .filter(|(_id, m)| m.user_id.is_some())
             .find(|(_id, m)| m.user_id.unwrap() == user_id)

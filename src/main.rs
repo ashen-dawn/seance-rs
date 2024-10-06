@@ -1,3 +1,5 @@
+#![feature(str_split_whitespace_remainder)]
+
 mod config;
 mod system;
 use system::Manager;

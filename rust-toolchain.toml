@@ -1,0 +1,4 @@
+# Only needed for str_split_whitespace_remainder, once
+# that stabilizes we can and should go back to stable
+[toolchain]
+channel = "nightly-2024-10-04"

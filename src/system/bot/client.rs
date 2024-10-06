@@ -23,18 +23,22 @@ impl Client {
         }
     }
 
-    pub async fn refetch_message(&self, message_id: MessageId, channel_id: ChannelId) {
+    pub async fn fetch_message(&self, message_id: MessageId, channel_id: ChannelId) -> FullMessage {
         let client = self.client.lock().await;
-        let bot_conf = self.bot_conf.read().await;
-        let message_channel = bot_conf.message_handler.as_ref().expect("No message handler");
 
-        let message = client
+        client
             .message(channel_id, message_id)
             .await
             .expect("Could not load message")
             .model()
             .await
-            .expect("Could not deserialize message");
+            .expect("Could not deserialize message")
+    }
+
+    pub async fn resend_message(&self, message_id: MessageId, channel_id: ChannelId) {
+        let bot_conf = self.bot_conf.read().await;
+        let message = self.fetch_message(message_id, channel_id).await;
+        let message_channel = bot_conf.message_handler.as_ref().expect("No message handler");
 
         let timestamp = if message.edited_timestamp.is_some() {
             message.edited_timestamp.unwrap()
@@ -43,7 +47,7 @@ impl Client {
         };
 
         message_channel
-            .send((timestamp, Message::Complete(message)))
+            .send((timestamp, Message::Complete(message, bot_conf.member_id)))
             .await;
     }
 

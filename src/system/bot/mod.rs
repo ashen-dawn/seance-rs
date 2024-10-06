@@ -66,8 +66,12 @@ impl Bot {
         self.gateway.start_listening()
     }
 
-    pub async fn refetch_message(&self, message_id: MessageId, channel_id: ChannelId) {
-        self.client.refetch_message(message_id, channel_id).await;
+    pub async fn fetch_message(&self, message_id: MessageId, channel_id: ChannelId) -> TwiMessage {
+        self.client.fetch_message(message_id, channel_id).await
+    }
+
+    pub async fn resend_message(&self, message_id: MessageId, channel_id: ChannelId) {
+        self.client.resend_message(message_id, channel_id).await;
     }
 
     pub async fn delete_message(&self, channel_id: ChannelId, message_id: MessageId) -> Result<(), TwiError> {

@@ -1,11 +1,12 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZeroUsize, str::FromStr, time::Duration};
 
+use lru::LruCache;
 use tokio::{
-    sync::{mpsc::{channel, Sender}, RwLock},
+    sync::mpsc::{channel, Sender},
     time::sleep,
 };
 use twilight_http::request::channel::reaction::RequestReactionType;
-use twilight_model::{channel::message::ReactionType, id::{marker::UserMarker, Id}};
+use twilight_model::{channel::message::{MessageReference, MessageType, ReactionType}, id::{marker::UserMarker, Id}};
 use twilight_model::util::Timestamp;
 
 use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
@@ -30,6 +31,7 @@ pub struct Manager {
     pub latch_state: Option<(MemberId, Timestamp)>,
     pub system_sender: Option<Sender<SystemEvent>>,
     pub aggregator: MessageAggregator,
+    pub send_cache: LruCache<ChannelId, TwiMessage>,
     pub reference_user_id: UserId,
 }
 
@@ -38,12 +40,13 @@ impl Manager {
         Self {
             reference_user_id: Id::from_str(&system_config.reference_user_id.as_str())
                 .expect(format!("Invalid user id for system {}", &system_name).as_str()),
+            aggregator: MessageAggregator::new(system_config.members.len()),
             name: system_name,
             config: system_config,
             bots: HashMap::new(),
             latch_state: None,
             system_sender: None,
-            aggregator: MessageAggregator::new(),
+            send_cache: LruCache::new(NonZeroUsize::new(15).unwrap()),
         }
     }
 
@@ -101,13 +104,13 @@ impl Manager {
                     self.start_bot(member_id).await;
                 }
 
-                Some(SystemEvent::NewMessage(event_time, message)) => {
-                    self.handle_message(message, event_time).await;
+                Some(SystemEvent::NewMessage(event_time, message, member_id)) => {
+                    self.handle_message(message, event_time, member_id).await;
                 }
 
                 Some(SystemEvent::RefetchMessage(member_id, message_id, channel_id)) => {
                     let bot = self.bots.get(&member_id).unwrap();
-                    bot.refetch_message(message_id, channel_id).await;
+                    bot.resend_message(message_id, channel_id).await;
                 }
 
                 Some(SystemEvent::AutoproxyTimeout(time_scheduled)) => {
@@ -160,8 +163,28 @@ impl Manager {
         });
     }
 
-    async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp) {
-        let parsed_message = MessageParser::parse(&message, None, &self.config, self.latch_state);
+    async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp, seen_by: MemberId) {
+        // let bot = self.bots.get(&seen_by).expect("No client for member");
+        let last_in_channel = self.send_cache.get(&message.channel_id);
+        let replied_message = if let MessageType::Reply = message.kind {
+            message.referenced_message.clone()
+        } else {
+            None
+        };
+
+        if let None = last_in_channel {
+            println!("ERROR: Could not look up last sent message in channel {}", message.channel_id);
+        }
+
+        let ref_message = if replied_message.is_some() {
+            replied_message.map(|m| *m)
+        } else if last_in_channel.is_some() {
+            last_in_channel.map(|m| m.clone())
+        } else {
+            None
+        };
+
+        let parsed_message = MessageParser::parse(&message, ref_message, &self.config, self.latch_state);
 
         match parsed_message {
             message_parser::ParsedMessage::UnproxiedMessage => (),
@@ -195,7 +218,7 @@ impl Manager {
         }
     }
 
-    async fn proxy_message(&self, message: &TwiMessage, member: MemberId, content: &str) -> Result<(), ()> {
+    async fn proxy_message(&mut self, message: &TwiMessage, member: MemberId, content: &str) -> Result<(), ()> {
         let bot = self.bots.get(&member).expect("No client for member");
 
         let duplicate_result = bot.duplicate_message(message, content).await;
@@ -215,6 +238,10 @@ impl Manager {
             let _ = bot.delete_message(message.channel_id, duplicate_result.unwrap().id).await;
             return Err(())
         }
+
+        // Sent successfully, add to send cache
+        let sent_message = duplicate_result.unwrap();
+        self.send_cache.put(sent_message.channel_id, sent_message);
 
         Ok(())
     }

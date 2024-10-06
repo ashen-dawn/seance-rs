@@ -94,7 +94,7 @@ impl Gateway {
                             }
 
                             message_channel
-                                .send((message.timestamp, Message::Complete(message)))
+                                .send((message.timestamp, Message::Complete(message, bot_conf.member_id)))
                                 .await;
                         }
 

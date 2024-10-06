@@ -14,7 +14,7 @@ pub type Status = twilight_model::gateway::presence::Status;
 
 #[derive(Clone)]
 pub enum Message {
-    Complete(FullMessage),
+    Complete(FullMessage, MemberId),
     Partial(PartialMessage, MemberId),
 }
 
@@ -31,7 +31,7 @@ pub enum SystemEvent {
     UpdateClientStatus(MemberId),
 
     // User event handling
-    NewMessage(Timestamp, FullMessage),
+    NewMessage(Timestamp, FullMessage, MemberId),
     EditedMessage(MessageEvent),
     NewReaction(ReactionEvent),
 

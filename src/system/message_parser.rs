@@ -36,7 +36,7 @@ static CORRECTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 impl MessageParser {
-    pub fn parse(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> ParsedMessage {
+    pub fn parse(message: &FullMessage, secondary_message: Option<FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> ParsedMessage {
         if message.content == r"\\" {
             return ParsedMessage::LatchClear(if let Some((member_id, _)) = latch_state {
                 member_id
@@ -73,13 +73,13 @@ impl MessageParser {
         ParsedMessage::UnproxiedMessage
     }
 
-    fn parse_command(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> Command {
+    fn parse_command(message: &FullMessage, secondary_message: Option<FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> Command {
         
         // If unable to parse
         Command::UnknownCommand
     }
 
-    fn check_correction(message: &FullMessage, secondary_message: Option<&FullMessage>) -> Option<ParsedMessage> {
+    fn check_correction(message: &FullMessage, secondary_message: Option<FullMessage>) -> Option<ParsedMessage> {
         None
     }
 

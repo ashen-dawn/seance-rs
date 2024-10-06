@@ -70,6 +70,10 @@ impl Bot {
         self.client.fetch_message(message_id, channel_id).await
     }
 
+    pub async fn fetch_recent_channel_messages(&self, channel_id: ChannelId) -> Result<Vec<FullMessage>, TwiError> {
+        self.client.fetch_recent_channel_messages(channel_id).await
+    }
+
     pub async fn resend_message(&self, message_id: MessageId, channel_id: ChannelId) {
         self.client.resend_message(message_id, channel_id).await;
     }

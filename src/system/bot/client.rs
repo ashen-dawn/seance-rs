@@ -35,6 +35,18 @@ impl Client {
             .expect("Could not deserialize message")
     }
 
+    pub async fn fetch_recent_channel_messages(&self, channel_id: ChannelId) -> Result<Vec<FullMessage>, TwiError> {
+        let client = self.client.lock().await;
+
+        Ok(client
+            .channel_messages(channel_id)
+            .limit(10).unwrap()
+            .await?
+            .model()
+            .await
+            .unwrap())
+    }
+
     pub async fn resend_message(&self, message_id: MessageId, channel_id: ChannelId) {
         let bot_conf = self.bot_conf.read().await;
         let message = self.fetch_message(message_id, channel_id).await;

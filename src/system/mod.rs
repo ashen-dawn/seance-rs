@@ -167,27 +167,39 @@ impl Manager {
     }
 
     async fn handle_message(&mut self, message: TwiMessage, timestamp: Timestamp, seen_by: MemberId) {
-        // let bot = self.bots.get(&seen_by).expect("No client for member");
-        let last_in_channel = self.send_cache.get(&message.channel_id);
-        let replied_message = if let MessageType::Reply = message.kind {
-            message.referenced_message.clone()
+        let bot = self.bots.get(&seen_by).expect("No client for member");
+
+        // If message type is reply, use that
+        let referenced_message = if let MessageType::Reply = message.kind {
+            message.referenced_message.as_ref().map(|message| message.as_ref())
         } else {
-            None
+            // Otherwise, check cache for lest message sent in channel
+            if self.send_cache.contains(&message.channel_id) {
+                self.send_cache.get(&message.channel_id)
+            } else {
+                // Or look it up if it's not in cache
+                let system_bot_ids : Vec<UserId> = self.config.members.iter().filter_map(|m| m.user_id).collect();
+                let recent_messages = bot.fetch_recent_channel_messages(message.channel_id).await;
+
+                let last_in_channel = recent_messages.map(|messages| {
+                    messages.into_iter().filter(|message|
+                        system_bot_ids.contains(&message.author.id)
+                    ).max_by_key(|message| message.timestamp.as_micros())
+                }).ok().flatten();
+
+                // Since we did all this work to look it up, insert it into cache
+                if let Some(last) = last_in_channel {
+                    self.send_cache.put(message.channel_id, last);
+                } else {
+                    println!("WARNING: Could not look up most recent message in channel {}", message.channel_id);
+                };
+
+                // Return the message referenced from cache so there's no unnecessary clone
+                self.send_cache.get(&message.channel_id)
+            }
         };
 
-        if let None = last_in_channel {
-            println!("ERROR: Could not look up last sent message in channel {}", message.channel_id);
-        }
-
-        let ref_message = if replied_message.is_some() {
-            replied_message.map(|m| *m)
-        } else if last_in_channel.is_some() {
-            last_in_channel.map(|m| m.clone())
-        } else {
-            None
-        };
-
-        let parsed_message = MessageParser::parse(&message, ref_message, &self.config, self.latch_state);
+        let parsed_message = MessageParser::parse(&message, referenced_message, &self.config, self.latch_state);
 
         match parsed_message {
             message_parser::ParsedMessage::UnproxiedMessage => (),

@@ -26,6 +26,7 @@ pub enum ParsedMessage {
 pub enum Command {
     Edit(MemberId, MessageId, String),
     Reproxy(MemberId, MessageId),
+    Delete(MessageId),
     Nick(MemberId, String),
     ReloadSystemConfig,
     ExitSéance,
@@ -97,6 +98,9 @@ impl MessageParser {
                         return Command::Reproxy(member, secondary_message.unwrap().id);
                     }
                 },
+                "delete" => {
+                    return Command::Delete(secondary_message.unwrap().id);
+                }
                 _ => (),
             },
             None => return Command::UnknownCommand,

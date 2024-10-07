@@ -207,13 +207,13 @@ impl Manager {
             message_parser::ParsedMessage::LatchClear(member_id) => {
                 let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
                 self.latch_state = None;
-                self.update_status_of_system();
+                self.update_status_of_system().await;
             },
 
             message_parser::ParsedMessage::SetProxyAndDelete(member_id) => {
                 let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
                 self.update_autoproxy_state_after_message(member_id, message.timestamp);
-                self.update_status_of_system();
+                self.update_status_of_system().await;
             }
 
             message_parser::ParsedMessage::ProxiedMessage { member_id, message_content, latch } => {
@@ -227,6 +227,13 @@ impl Manager {
 
             message_parser::ParsedMessage::Command(Command::Edit(member_id, message_id, new_content)) => {
                 let bot = self.bots.get(&member_id).unwrap();
+
+                let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
+                if author.is_none() {
+                    println!("Cannot edit another user's message");
+                    let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
+                    return
+                }
 
                 if let Ok(new_message) = bot.edit_message(message.channel_id, message_id, new_content).await {
 
@@ -248,8 +255,14 @@ impl Manager {
                     return
                 }
 
-                let message_author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config).unwrap();
-                if message_author != member_id {
+                let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
+                if author.is_none() {
+                    println!("Cannot reproxy another user's message");
+                    let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
+                    return
+                }
+
+                if author.unwrap() != member_id {
                     // TODO: Don't allow this if other messages have been sent maybe?
                     let orig = referenced_message.unwrap().clone();
                     if let Ok(_) = self.proxy_message(&orig, member_id, orig.content.as_str()).await {
@@ -261,6 +274,21 @@ impl Manager {
                 }
 
                 let bot = self.bots.get(&member_id).unwrap();
+                let _ = bot.delete_message(message.channel_id, message.id).await;
+            }
+
+            message_parser::ParsedMessage::Command(Command::Delete(message_id)) => {
+                let member_id = self.latch_state.map(|(id,_)| id).unwrap_or(0);
+
+                let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
+                if author.is_none() {
+                    println!("Cannot delete another user's message");
+                    let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
+                    return
+                }
+
+                let bot = self.bots.get(&member_id).unwrap();
+                let _ = bot.delete_message(message.channel_id, message_id).await;
                 let _ = bot.delete_message(message.channel_id, message.id).await;
             }
 

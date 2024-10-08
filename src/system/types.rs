@@ -41,3 +41,10 @@ pub enum SystemEvent {
     // Autoproxy
     AutoproxyTimeout(Timestamp),
 }
+
+pub enum SystemThreadCommand {
+    Restart,
+    ReloadConfig,
+    ShutdownSystem,
+    ShutdownAll,
+}

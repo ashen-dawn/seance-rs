@@ -76,18 +76,20 @@ fn spawn_system(system_name : &String, system_config: config::System, waker: mps
     let name = system_name.clone();
     let config = system_config.clone();
 
-    thread::spawn(move || -> _ {
-        let thread_local_runtime = runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    thread::Builder::new()
+        .name(format!("seance_{}", &name))
+        .spawn(move || -> _ {
+            let thread_local_runtime = runtime::Builder::new_current_thread().enable_all().build().unwrap();
 
-        // TODO: allow system manager runtime to return a command
-        thread_local_runtime.block_on(async {
-            let mut system = Manager::new(name, config);
-            system.start_clients().await;
-        });
+            // TODO: allow system manager runtime to return a command
+            thread_local_runtime.block_on(async {
+                let mut system = Manager::new(name, config);
+                system.start_clients().await;
+            });
 
-        let _ = waker.send(());
-        SystemThreadCommand::Restart
-    })
+            let _ = waker.send(());
+            SystemThreadCommand::Restart
+        }).unwrap()
 }
 
 

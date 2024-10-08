@@ -82,6 +82,10 @@ impl Manager {
             self.start_bot(member_id).await;
         }
 
+        if self.config.members.len() < 1 {
+            println!("WARNING: System {} has no configured members", &self.name);
+        }
+
         loop {
             match system_receiver.recv().await {
                 Some(SystemEvent::GatewayConnected(member_id, user_id)) => {

@@ -20,13 +20,14 @@ pub struct MessageAggregator {
 
 impl MessageAggregator {
     pub fn new(system_size: usize) -> Self {
-        let (tx, rx) = channel::<MessageEvent>(system_size * 2);
+        let buf_size = std::cmp::max(system_size * 2, 1);
+        let (tx, rx) = channel::<MessageEvent>(buf_size);
 
         Self {
             state: Arc::new(RwLock::new( AggregatorState {
                 tx,
                 rx,
-                message_cache: LruCache::new(NonZeroUsize::new(system_size * 2).unwrap()),
+                message_cache: LruCache::new(NonZeroUsize::new(buf_size).unwrap()),
                 system_emitter: None,
 
             }))

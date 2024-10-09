@@ -55,9 +55,10 @@ impl MessageParser {
         }
 
         if message.content.starts_with(r"!") {
-            return ParsedMessage::Command(
-                MessageParser::parse_command(message, secondary_message, system_config, latch_state)
-            );
+            if let Some(parse) = MessageParser::check_command(message, secondary_message, system_config, latch_state) {
+                return ParsedMessage::Command(parse);
+
+            }
         }
 
         if CORRECTION_REGEX.is_match(message.content.as_str()) {
@@ -78,32 +79,32 @@ impl MessageParser {
         ParsedMessage::UnproxiedMessage
     }
 
-    fn parse_command(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> Command {
+    fn check_command(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> Option<Command> {
         let mut words = message.content.strip_prefix("!").unwrap().split_whitespace();
         let first_word = words.next();
 
         match first_word {
+            None => return None,
             Some(command_name) => match command_name {
                 "edit" => {
                     let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();
-                    return Command::Edit(editing_member, secondary_message.unwrap().id, words.remainder().unwrap().to_string())
+                    return Some(Command::Edit(editing_member, secondary_message.unwrap().id, words.remainder().unwrap().to_string()));
                 },
                 "nick" => {
                     if let Some(member) = MessageParser::match_member(words.next(), system_config) {
-                        return Command::Nick(member, words.remainder().unwrap().to_string());
+                        return Some(Command::Nick(member, words.remainder().unwrap().to_string()));
                     }
                 },
                 "reproxy" => {
                     if let Some(member) = MessageParser::match_member(words.next(), system_config) {
-                        return Command::Reproxy(member, secondary_message.unwrap().id);
+                        return Some(Command::Reproxy(member, secondary_message.unwrap().id));
                     }
                 },
                 "delete" => {
-                    return Command::Delete(secondary_message.unwrap().id);
+                    return Some(Command::Delete(secondary_message.unwrap().id));
                 }
                 _ => (),
             },
-            None => return Command::UnknownCommand,
         }
 
         // Attempt matching !s
@@ -112,7 +113,7 @@ impl MessageParser {
             let parts: Vec<&str> = message.content.split(separator).collect();
 
             if parts.len() != 3 && parts.len() != 4 {
-                return Command::InvalidCommand
+                return None
             }
 
             let pattern = parts.get(1).unwrap();
@@ -130,7 +131,7 @@ impl MessageParser {
                 'R' => {regex.crlf(true);},
                 's' => {regex.dot_matches_new_line(true);},
                 'U' => {regex.swap_greed(true);},
-                _ => {return Command::InvalidCommand;},
+                _ => {return None;},
             }};
 
             let regex = regex.build().unwrap();
@@ -143,11 +144,11 @@ impl MessageParser {
             };
 
             let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();
-            return Command::Edit(editing_member, secondary_message.as_ref().unwrap().id, new_content.to_string());
+            return Some(Command::Edit(editing_member, secondary_message.as_ref().unwrap().id, new_content.to_string()));
         }
 
         // If unable to parse
-        Command::UnknownCommand
+        None
     }
 
     fn check_correction(message: &FullMessage, secondary_message: Option<&FullMessage>) -> Option<ParsedMessage> {

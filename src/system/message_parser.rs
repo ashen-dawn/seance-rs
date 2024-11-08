@@ -134,13 +134,20 @@ impl MessageParser {
                 _ => {return None;},
             }};
 
-            let regex = regex.build().unwrap();
-
+            let valid_regex = regex.build();
             let original_content = &secondary_message.as_ref().unwrap().content;
-            let new_content = if global {
-                regex.replace_all(original_content.as_str(), *replacement)
+
+            // If the regex parses, replace with that
+            let new_content = if let Ok(regex) = valid_regex {
+                if global {
+                    regex.replace_all(original_content.as_str(), *replacement).to_string()
+                } else {
+                    regex.replace(original_content.as_str(), *replacement).to_string()
+                }
+
+            // Else attempt replace as string
             } else {
-                regex.replace(original_content.as_str(), *replacement)
+                original_content.replace(pattern, replacement)
             };
 
             let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();

@@ -68,7 +68,7 @@ fn main() {
 
     loop {
         // Wait for an event from one of the threads
-        let ui_event = waiter.recv_timeout(Duration::from_millis(500));
+        let ui_event = waiter.recv_timeout(Duration::from_secs(30));
 
         if let Ok((system_name, ui_event)) = ui_event {
             let system_state = ui_state.systems.get_mut(&system_name).unwrap();

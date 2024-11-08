@@ -55,6 +55,7 @@ pub struct System {
     pub forward_pings: bool,
     pub autoproxy: Option<AutoproxyConfig>,
     pub pluralkit: Option<PluralkitConfig>,
+    pub ui_color: Option<String>,
 }
 
 fn default_forward_pings() -> bool {

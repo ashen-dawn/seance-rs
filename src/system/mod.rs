@@ -1,5 +1,6 @@
 use std::{collections::HashMap, num::NonZeroUsize, str::FromStr, time::Duration};
 
+use std::sync::mpsc::Sender as ThreadSender;
 use lru::LruCache;
 use tokio::{
     sync::mpsc::{channel, Sender},
@@ -10,6 +11,7 @@ use twilight_model::{channel::message::{MessageReference, MessageType, ReactionT
 use twilight_model::util::Timestamp;
 
 use crate::config::{AutoproxyConfig, AutoproxyLatchScope, Member};
+use crate::SystemUiEvent;
 
 mod aggregator;
 mod bot;
@@ -33,10 +35,11 @@ pub struct Manager {
     pub aggregator: MessageAggregator,
     pub send_cache: LruCache<ChannelId, TwiMessage>,
     pub reference_user_id: UserId,
+    pub ui_sender: ThreadSender<(String, SystemUiEvent)>,
 }
 
 impl Manager {
-    pub fn new(system_name: String, system_config: crate::config::System) -> Self {
+    pub fn new(system_name: String, system_config: crate::config::System, ui_sender : ThreadSender<(String, SystemUiEvent)>) -> Self {
         Self {
             reference_user_id: Id::from_str(&system_config.reference_user_id.as_str())
                 .expect(format!("Invalid user id for system {}", &system_name).as_str()),
@@ -47,6 +50,7 @@ impl Manager {
             latch_state: None,
             system_sender: None,
             send_cache: LruCache::new(NonZeroUsize::new(15).unwrap()),
+            ui_sender,
         }
     }
 
@@ -71,7 +75,9 @@ impl Manager {
     }
 
     pub async fn start_clients(&mut self) {
-        println!("Starting clients for system {}", self.name);
+        let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+            format!("Starting clients for system {}", self.name)
+        )));
 
         let (system_sender, mut system_receiver) = channel::<SystemEvent>(100);
         self.system_sender = Some(system_sender.clone());
@@ -83,7 +89,9 @@ impl Manager {
         }
 
         if self.config.members.len() < 1 {
-            println!("WARNING: System {} has no configured members", &self.name);
+            let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                format!("WARNING: System {} has no configured members", &self.name)
+            )));
         }
 
         loop {
@@ -94,19 +102,29 @@ impl Manager {
 
                     let member = self.find_member_by_id(member_id).unwrap();
 
-                    println!("Gateway client {} ({}) connected", member.name, member_id);
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::GatewayConnect(member.name.clone())));
+
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Gateway client {} ({}) connected", member.name, member_id)
+                    )));
                 }
 
                 Some(SystemEvent::GatewayError(member_id, message)) => {
                     let member = self.find_member_by_id(member_id).unwrap();
 
-                    println!("Gateway client {} ran into error {}", member.name, message);
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Gateway client {} ran into error {}", member.name, message)
+                    )));
                 }
 
                 Some(SystemEvent::GatewayClosed(member_id)) => {
                     let member = self.find_member_by_id(member_id).unwrap();
 
-                    println!("Gateway client {} closed", member.name);
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::GatewayDisconnect(member.name.clone())));
+
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Gateway client {} closed", member.name)
+                    )));
 
                     self.start_bot(member_id).await;
                 }
@@ -123,7 +141,11 @@ impl Manager {
                 Some(SystemEvent::AutoproxyTimeout(time_scheduled)) => {
                     if let Some((_member, current_last_message)) = self.latch_state.clone() {
                         if current_last_message == time_scheduled {
-                            println!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), time_scheduled.as_secs());
+                            let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::MemberAutoproxy(None)));
+
+                            let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                                format!("Autoproxy timeout has expired: {} (last sent), {} (timeout scheduled)", current_last_message.as_secs(), time_scheduled.as_secs())
+                            )));
                             self.latch_state = None;
                             self.update_status_of_system().await;
                         }
@@ -195,7 +217,9 @@ impl Manager {
                 if let Some(last) = last_in_channel {
                     self.send_cache.put(message.channel_id, last);
                 } else {
-                    println!("WARNING: Could not look up most recent message in channel {}", message.channel_id);
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("WARNING: Could not look up most recent message in channel {}", message.channel_id)
+                    )));
                 };
 
                 // Return the message referenced from cache so there's no unnecessary clone
@@ -206,12 +230,17 @@ impl Manager {
         let parsed_message = MessageParser::parse(&message, referenced_message, &self.config, self.latch_state);
 
         match parsed_message {
-            message_parser::ParsedMessage::UnproxiedMessage => (),
+            message_parser::ParsedMessage::UnproxiedMessage(log_string) => if let Some(log_string) = log_string {
+                let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                    format!("Parse error: {log_string}")
+                )));
+            },
 
             message_parser::ParsedMessage::LatchClear(member_id) => {
                 let _ = self.bots.get(&member_id).unwrap().delete_message(message.channel_id, message.id).await;
                 self.latch_state = None;
                 self.update_status_of_system().await;
+                let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::MemberAutoproxy(None)));
             },
 
             message_parser::ParsedMessage::SetProxyAndDelete(member_id) => {
@@ -234,7 +263,9 @@ impl Manager {
 
                 let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
                 if author.is_none() {
-                    println!("Cannot edit another user's message");
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Cannot edit another user's message")
+                    )));
                     let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
                     return
                 }
@@ -254,14 +285,18 @@ impl Manager {
 
             message_parser::ParsedMessage::Command(Command::Reproxy(member_id, message_id)) => {
                 if !referenced_message.map(|message| message.id == message_id).unwrap_or(false) {
-                    println!("ERROR: Attempted reproxy on message other than referenced_message");
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("ERROR: Attempted reproxy on message other than referenced_message")
+                    )));
                     let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "⁉️" }).await;
                     return
                 }
 
                 let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
                 if author.is_none() {
-                    println!("Cannot reproxy another user's message");
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Cannot reproxy another user's message")
+                    )));
                     let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
                     return
                 }
@@ -274,7 +309,9 @@ impl Manager {
                         self.update_status_of_system().await;
                     }
                 } else {
-                    println!("Not reproxying under same user");
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Not reproxying under same user")
+                    )));
                 }
 
                 let bot = self.bots.get(&member_id).unwrap();
@@ -286,7 +323,9 @@ impl Manager {
 
                 let author = MessageParser::get_member_id_from_user_id(referenced_message.unwrap().author.id, &self.config);
                 if author.is_none() {
-                    println!("Cannot delete another user's message");
+                    let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                        format!("Cannot delete another user's message")
+                    )));
                     let _ = self.bots.get(&member_id).unwrap().react_message(message.channel_id, message.id, &RequestReactionType::Unicode { name: "🛑" }).await;
                     return
                 }
@@ -294,6 +333,12 @@ impl Manager {
                 let bot = self.bots.get(&member_id).unwrap();
                 let _ = bot.delete_message(message.channel_id, message_id).await;
                 let _ = bot.delete_message(message.channel_id, message.id).await;
+            }
+
+            message_parser::ParsedMessage::Command(Command::Log(log_string)) => {
+                let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                    format!("Log: {log_string}")
+                )));
             }
 
             message_parser::ParsedMessage::Command(Command::UnknownCommand) => {
@@ -317,7 +362,9 @@ impl Manager {
         let duplicate_result = bot.duplicate_message(message, content).await;
 
         if duplicate_result.is_err() {
-            println!("Could not copy message: {:?}", duplicate_result);
+            let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                format!("Could not copy message: {:?}", duplicate_result)
+            )));
             return Err(())
         }
 
@@ -325,7 +372,9 @@ impl Manager {
         let delete_result = bot.delete_message(message.channel_id, message.id).await;
 
         if delete_result.is_err() {
-            println!("Could not delete message: {:?}", delete_result);
+            let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::LogLine(
+                format!("Could not delete message: {:?}", delete_result)
+            )));
 
             // Delete the duplicated message if that failed
             let _ = bot.delete_message(message.channel_id, duplicate_result.unwrap().id).await;
@@ -349,6 +398,9 @@ impl Manager {
                 presence_indicator: _,
             }) => {
                 self.latch_state = Some((member, timestamp));
+
+                let member = self.find_member_by_id(member).unwrap();
+                let _ = self.ui_sender.send((self.name.clone(), SystemUiEvent::MemberAutoproxy(Some(member.name.clone()))));
 
                 if let Some(channel) = self.system_sender.clone() {
                     let last_message = timestamp.clone();

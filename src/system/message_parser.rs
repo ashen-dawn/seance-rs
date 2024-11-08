@@ -15,7 +15,7 @@ pub enum ParsedMessage {
         message_content: String,
         latch: bool,
     },
-    UnproxiedMessage,
+    UnproxiedMessage(Option<String>),
     LatchClear(MemberId),
 
     // TODO: Figure out how to represent emotes
@@ -28,6 +28,7 @@ pub enum Command {
     Reproxy(MemberId, MessageId),
     Delete(MessageId),
     Nick(MemberId, String),
+    Log(String),
     ReloadSystemConfig,
     ExitSéance,
     UnknownCommand,
@@ -51,13 +52,14 @@ impl MessageParser {
         }
 
         if message.content.starts_with(r"\") {
-            return ParsedMessage::UnproxiedMessage
+            return ParsedMessage::UnproxiedMessage(None)
         }
 
         if message.content.starts_with(r"!") {
             if let Some(parse) = MessageParser::check_command(message, secondary_message, system_config, latch_state) {
                 return ParsedMessage::Command(parse);
-
+            } else {
+                return ParsedMessage::UnproxiedMessage(Some(format!("Unknown command string: {}", message.content)));
             }
         }
 
@@ -76,7 +78,7 @@ impl MessageParser {
         }
 
         // If nothing else
-        ParsedMessage::UnproxiedMessage
+        ParsedMessage::UnproxiedMessage(None)
     }
 
     fn check_command(message: &FullMessage, secondary_message: Option<&FullMessage>, system_config: &System, latch_state: Option<(MemberId, Timestamp)>) -> Option<Command> {
@@ -86,6 +88,10 @@ impl MessageParser {
         match first_word {
             None => return None,
             Some(command_name) => match command_name {
+                "log" => {
+                    let remainder = words.remainder().unwrap().to_string();
+                    return Some(Command::Log(remainder));
+                },
                 "edit" => {
                     let editing_member = Self::get_member_id_from_user_id(secondary_message.as_ref().unwrap().author.id, system_config).unwrap();
                     return Some(Command::Edit(editing_member, secondary_message.unwrap().id, words.remainder().unwrap().to_string()));

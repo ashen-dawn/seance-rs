@@ -62,6 +62,10 @@ impl Bot {
         self.gateway.set_status(status).await;
     }
 
+    pub async fn set_nick(&self, server_id: ServerId, nick: String) {
+        self.client.set_nick(server_id, nick.as_str()).await.expect("Could not update nick")
+    }
+
     pub fn start(&self) {
         self.gateway.start_listening()
     }

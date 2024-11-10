@@ -1,12 +1,13 @@
 pub use twilight_model::channel::Message as TwiMessage;
 use twilight_model::gateway::payload::incoming::MessageUpdate as PartialMessage;
-use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
+use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker, GuildMarker};
 use twilight_model::id::Id;
 use twilight_model::util::Timestamp;
 
 pub type MemberId = usize;
 pub type MessageId = Id<MessageMarker>;
 pub type ChannelId = Id<ChannelMarker>;
+pub type ServerId = Id<GuildMarker>;
 pub type UserId = Id<UserMarker>;
 pub type FullMessage = TwiMessage;
 

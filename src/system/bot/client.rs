@@ -23,6 +23,20 @@ impl Client {
         }
     }
 
+    pub async fn set_nick<'a>(&self, server_id: ServerId, nick: &'a str) -> Result<(), TwiError> {
+        let client = self.client.lock().await;
+
+        let current_user = client.current_user()
+            .await?.model().await.expect("Could not retrieve current user");
+
+        client
+           .update_guild_member(server_id, current_user.id)
+           .nick(Some(nick)).expect("Invalid nick")
+           .await?;
+
+        Ok(())
+    }
+
     pub async fn fetch_message(&self, message_id: MessageId, channel_id: ChannelId) -> FullMessage {
         let client = self.client.lock().await;
 

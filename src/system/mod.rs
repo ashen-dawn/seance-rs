@@ -342,10 +342,11 @@ impl Manager {
             }
 
             message_parser::ParsedMessage::Command(Command::Nick(member_id, nick)) => {
-                let member = self.bots.get(&member_id).unwrap();
+                let bot = self.bots.get(&member_id).unwrap();
                 let server_id = message.guild_id.expect("Message has no guild");
 
-                member.set_nick(server_id, nick).await;
+                bot.set_nick(server_id, nick).await;
+                let _ = bot.delete_message(message.channel_id, message.id).await;
             }
 
             message_parser::ParsedMessage::Command(Command::UnknownCommand) => {
